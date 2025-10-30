@@ -898,7 +898,11 @@ def map_viewer(request, file_id):
     if file_obj.geoserver_layer_name and file_obj.gis_status in ['published', 'processed']:
         # Generate public-facing GeoServer URLs
         host = request.get_host()
-        scheme = 'https' if request.is_secure() else 'http'
+        # Force HTTPS for adma.unl.edu domain, detect for others
+        if 'adma.unl.edu' in host:
+            scheme = 'https'  # Always use HTTPS for production domain
+        else:
+            scheme = 'https' if request.is_secure() else 'http'
         
         # Use /geoserver/ proxy path for external access
         geoserver_base_url = f"{scheme}://{host}/geoserver"
@@ -949,7 +953,11 @@ def public_map_viewer(request, file_id):
     if file_obj.geoserver_layer_name and file_obj.gis_status in ['published', 'processed']:
         # Generate public-facing GeoServer URLs
         host = request.get_host()
-        scheme = 'https' if request.is_secure() else 'http'
+        # Force HTTPS for adma.unl.edu domain, detect for others
+        if 'adma.unl.edu' in host:
+            scheme = 'https'  # Always use HTTPS for production domain
+        else:
+            scheme = 'https' if request.is_secure() else 'http'
         
         # Use /geoserver/ proxy path for external access
         geoserver_base_url = f"{scheme}://{host}/geoserver"

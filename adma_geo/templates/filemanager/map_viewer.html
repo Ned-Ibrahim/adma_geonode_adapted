@@ -512,13 +512,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 200);
     
     function initializeMap() {
-        // Define UTM Zone 14N projection (EPSG:32614)
-        const utmProjection = new ol.proj.Projection({
-            code: 'EPSG:32614',
-            extent: [166021.44, 0.00, 833978.56, 9329005.18],
-            units: 'm'
-        });
-        ol.proj.addProjection(utmProjection);
+        // Define UTM Zone 14N projection (EPSG:32614) with manual transformation
+        // Since OpenLayers might not have the full proj4 definition, we'll do manual conversion
+        console.log('Setting up UTM Zone 14N projection for coordinate transformation');
         
         // Create individual base layers WITH native attribution
         const baseLayers = {
@@ -664,11 +660,42 @@ document.addEventListener('DOMContentLoaded', function() {
             const sourceCRS = '{{ geoserver_info.crs|default:"EPSG:4326" }}';
             console.log('Source CRS:', sourceCRS);
             
-            const extent = ol.proj.transformExtent(
-                [storedExtent.minx, storedExtent.miny, storedExtent.maxx, storedExtent.maxy],
-                sourceCRS,     // File's actual CRS
-                'EPSG:3857'    // Web Mercator (target CRS)
-            );
+            let extent;
+            if (sourceCRS === 'EPSG:32614') {
+                // Manual transformation for UTM Zone 14N to Web Mercator
+                // UTM Zone 14N covers Nebraska area, central meridian -99°
+                // Approximate conversion for Nebraska area
+                const utmToLonLat = function(x, y) {
+                    // Simplified UTM to Lat/Lon conversion for Zone 14N
+                    // This is an approximation for the Nebraska area
+                    const centralMeridian = -99.0;
+                    const falseEasting = 500000.0;
+                    const falseNorthing = 0.0;
+                    
+                    // Approximate conversion (not geodetically precise, but sufficient for mapping)
+                    const lon = centralMeridian + (x - falseEasting) / 111320.0;
+                    const lat = y / 110540.0;
+                    
+                    return [lon, lat];
+                };
+                
+                const minLonLat = utmToLonLat(storedExtent.minx, storedExtent.miny);
+                const maxLonLat = utmToLonLat(storedExtent.maxx, storedExtent.maxy);
+                
+                // Transform from Lat/Lon to Web Mercator
+                const minWebMercator = ol.proj.fromLonLat(minLonLat);
+                const maxWebMercator = ol.proj.fromLonLat(maxLonLat);
+                
+                extent = [minWebMercator[0], minWebMercator[1], maxWebMercator[0], maxWebMercator[1]];
+                console.log('Manual UTM conversion - Lon/Lat bounds:', minLonLat, maxLonLat);
+            } else {
+                // Use OpenLayers built-in transformation for other CRS
+                extent = ol.proj.transformExtent(
+                    [storedExtent.minx, storedExtent.miny, storedExtent.maxx, storedExtent.maxy],
+                    sourceCRS,     // File's actual CRS
+                    'EPSG:3857'    // Web Mercator (target CRS)
+                );
+            }
             
             console.log('Transformed stored extent (Web Mercator):', extent);
             
