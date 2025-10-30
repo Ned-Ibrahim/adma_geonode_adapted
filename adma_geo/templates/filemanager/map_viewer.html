@@ -579,13 +579,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 attributions: [], // Remove WMS attribution
                 // Add raster-specific source options
                 transition: 0,  // Disable transitions for raster layers
-                cacheSize: 2048  // Increase cache for raster tiles
+                cacheSize: 2048,  // Increase cache for raster tiles
+                // Rate limiting protection for remote servers
+                tileLoadFunction: function(tile, src) {
+                    // Add small delay between tile requests to avoid rate limiting
+                    setTimeout(function() {
+                        tile.getImage().src = src;
+                    }, Math.random() * 100); // Random delay 0-100ms
+                }
             }),
             title: '{{ file.name }}',
             opacity: 1.0,
             visible: true,
-            // Add layer-specific options for raster
-            preload: 1  // Preload tiles for smoother display
+            // Reduce preload to avoid rate limiting on remote servers
+            preload: 0  // Don't preload tiles to reduce concurrent requests
         });
         
         // Enhanced error handling for WMS source
