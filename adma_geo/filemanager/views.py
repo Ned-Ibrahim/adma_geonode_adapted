@@ -928,6 +928,7 @@ def map_viewer(request, file_id):
             'wfs_url': f"{geoserver_base_url}/wfs",
             'is_published': file_obj.gis_status == 'published',
             'spatial_extent': spatial_extent,
+            'crs': getattr(file_obj, 'crs', 'EPSG:4326'),  # Default to WGS84 if not set
         }
     
     return render(request, 'filemanager/map_viewer.html', {
@@ -978,6 +979,7 @@ def public_map_viewer(request, file_id):
             'wfs_url': f"{geoserver_base_url}/wfs",
             'is_published': file_obj.gis_status == 'published',
             'spatial_extent': spatial_extent,
+            'crs': getattr(file_obj, 'crs', 'EPSG:4326'),  # Default to WGS84 if not set
         }
     
     # Reuse the same template as private map viewer, but with public view context

@@ -160,6 +160,10 @@ ALL_SPATIAL_EXTENSIONS = [
     '.tiff', '.tif', '.geotiff', '.geotif', '.zip'
 ]
 
+# Proxy Settings for HTTPS detection
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+
 # ChromaDB and Embedding Settings
 # NOTE: ChromaDB and embedding settings removed
 # Search now uses PostgreSQL text matching instead of semantic embeddings

@@ -553,28 +553,70 @@ document.addEventListener('DOMContentLoaded', function() {
             })
         };
         
-        // Create WMS layer WITHOUT attribution
+        // Create WMS layer with raster-specific optimizations
+        const wmsParams = {
+            'LAYERS': '{{ geoserver_info.workspace }}:{{ geoserver_info.layer_name }}',
+            'TILED': true,
+            'FORMAT': 'image/png',
+            'TRANSPARENT': true
+        };
+        
+        // Add raster-specific parameters for better compatibility
+        {% if file.file_type == 'gis' and file.name|lower|slice:"-4:" == '.tif' or file.name|lower|slice:"-5:" == '.tiff' %}
+        // Raster-specific WMS parameters
+        wmsParams['STYLES'] = '';  // Explicitly set empty styles for raster
+        wmsParams['SRS'] = 'EPSG:3857';  // Force Web Mercator for better compatibility
+        wmsParams['EXCEPTIONS'] = 'application/vnd.ogc.se_inimage';  // Get errors as images
+        console.log('🗺️ Configuring raster layer with enhanced parameters');
+        {% endif %}
+        
         const wmsLayer = new ol.layer.Tile({
             source: new ol.source.TileWMS({
                 url: '{{ geoserver_info.wms_url }}',
-                params: {
-                    'LAYERS': '{{ geoserver_info.workspace }}:{{ geoserver_info.layer_name }}',
-                    'TILED': true,
-                    'FORMAT': 'image/png',
-                    'TRANSPARENT': true
-                },
+                params: wmsParams,
                 serverType: 'geoserver',
                 crossOrigin: 'anonymous',
-                attributions: [] // Remove WMS attribution
+                attributions: [], // Remove WMS attribution
+                // Add raster-specific source options
+                transition: 0,  // Disable transitions for raster layers
+                cacheSize: 2048  // Increase cache for raster tiles
             }),
             title: '{{ file.name }}',
-            opacity: 1.0, // Make fully opaque to ensure visibility
-            visible: true // Explicitly set to visible
+            opacity: 1.0,
+            visible: true,
+            // Add layer-specific options for raster
+            preload: 1  // Preload tiles for smoother display
         });
         
-        // Add error handling for WMS source
+        // Enhanced error handling for WMS source
         wmsLayer.getSource().on('tileloaderror', function(event) {
-            console.error('WMS Tile Load Error:', event);
+            console.error('🚨 WMS Tile Load Error:', event.tile.src_);
+            console.error('Error event:', event);
+            
+            // For raster layers, provide specific debugging info
+            {% if file.file_type == 'gis' and file.name|lower|slice:"-4:" == '.tif' or file.name|lower|slice:"-5:" == '.tiff' %}
+            console.error('🗺️ Raster layer error - this may be due to:');
+            console.error('  1. CORS issues with raster tiles');
+            console.error('  2. CRS/projection mismatch (layer uses EPSG:32614)');
+            console.error('  3. GeoServer coverage store configuration');
+            console.error('  4. Network connectivity to remote GeoServer');
+            
+            // Try to fetch the failing URL directly to get more info
+            fetch(event.tile.src_)
+                .then(response => {
+                    console.error('Direct fetch status:', response.status);
+                    console.error('Direct fetch headers:', Object.fromEntries(response.headers.entries()));
+                    return response.text();
+                })
+                .then(text => {
+                    if (text.includes('ServiceException') || text.includes('Error')) {
+                        console.error('GeoServer error response:', text.substring(0, 500));
+                    }
+                })
+                .catch(fetchError => {
+                    console.error('Direct fetch failed:', fetchError);
+                });
+            {% endif %}
         });
         
         // Create map with individual layers
@@ -611,10 +653,14 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('Using stored spatial extent:', storedExtent);
             
             // Transform to Web Mercator and zoom to it
+            // Use the file's actual CRS for proper coordinate transformation
+            const sourceCRS = '{{ geoserver_info.crs|default:"EPSG:4326" }}';
+            console.log('Source CRS:', sourceCRS);
+            
             const extent = ol.proj.transformExtent(
                 [storedExtent.minx, storedExtent.miny, storedExtent.maxx, storedExtent.maxy],
-                'EPSG:4326',
-                'EPSG:3857'
+                sourceCRS,     // File's actual CRS
+                'EPSG:3857'    // Web Mercator (target CRS)
             );
             
             console.log('Transformed stored extent (Web Mercator):', extent);
