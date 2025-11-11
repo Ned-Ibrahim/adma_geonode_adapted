@@ -185,6 +185,7 @@
                     <a class="nav-link" href="#public-sharing">Public Sharing</a>
                     <a class="nav-link" href="#search-filter">Search & Filter</a>
                     <a class="nav-link" href="#api-endpoints">API Endpoints</a>
+                    <a class="nav-link" href="#api-documentation">API Documentation</a>
                     <a class="nav-link" href="#system-architecture">System Architecture</a>
                     <a class="nav-link" href="#troubleshooting">Troubleshooting</a>
                     <a class="nav-link" href="#faq">FAQ</a>
@@ -238,7 +239,10 @@
                     <span class="badge-feature">Folder Hierarchies</span>
                     <span class="badge-feature">Duplicate Handling</span>
                     <span class="badge-feature">Pagination Support</span>
-                    <span class="badge-feature">RESTful API</span>
+                    <span class="badge-feature">Token-Based API</span>
+                    <span class="badge-feature">ZIP Download</span>
+                    <span class="badge-feature">Bulk Upload</span>
+                    <span class="badge-feature">API Authentication</span>
                 </div>
             </section>
 
@@ -830,8 +834,131 @@ Duplicate 3: document_3.pdf
             <section id="api-endpoints">
                 <h2><i class="fas fa-code me-2"></i>API Endpoints</h2>
 
-                <h3>AJAX Endpoints</h3>
-                <p>ADMA provides RESTful API endpoints for frontend interactions:</p>
+                <h3>Token-Based REST API</h3>
+                <p>ADMA provides comprehensive token-based REST APIs for programmatic access:</p>
+
+                <div class="alert alert-tip">
+                    <i class="fas fa-lightbulb me-2"></i>
+                    <strong>Authentication:</strong> All API endpoints use token authentication. Include <code>Authorization: Token your_token_here</code> in request headers.
+                </div>
+
+                <h4>Authentication Endpoints</h4>
+                <div class="table-responsive">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Endpoint</th>
+                                <th>Method</th>
+                                <th>Purpose</th>
+                                <th>Authentication</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>/api/v1/auth/token/</td>
+                                <td>POST</td>
+                                <td>Create authentication token</td>
+                                <td>Username/Password</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>File Management APIs</h4>
+                <div class="table-responsive">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Endpoint</th>
+                                <th>Method</th>
+                                <th>Purpose</th>
+                                <th>Parameters</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>/api/v1/files/upload/</td>
+                                <td>POST</td>
+                                <td>Upload multiple files</td>
+                                <td>files, folder_id, is_public</td>
+                            </tr>
+                            <tr>
+                                <td>/api/v1/files/</td>
+                                <td>GET</td>
+                                <td>List user's files</td>
+                                <td>folder_id, is_public, file_type</td>
+                            </tr>
+                            <tr>
+                                <td>/api/v1/files/{id}/download/</td>
+                                <td>GET</td>
+                                <td>Download specific file</td>
+                                <td>None</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Folder Management APIs</h4>
+                <div class="table-responsive">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Endpoint</th>
+                                <th>Method</th>
+                                <th>Purpose</th>
+                                <th>Parameters</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>/api/v1/folders/upload/</td>
+                                <td>POST</td>
+                                <td>Upload folder structure</td>
+                                <td>files, file_paths, folder_id, is_public</td>
+                            </tr>
+                            <tr>
+                                <td>/api/v1/folders/</td>
+                                <td>GET</td>
+                                <td>List user's folders</td>
+                                <td>parent_id, is_public</td>
+                            </tr>
+                            <tr>
+                                <td>/api/v1/folders/{id}/info/</td>
+                                <td>GET</td>
+                                <td>Get folder information</td>
+                                <td>None</td>
+                            </tr>
+                            <tr>
+                                <td>/api/v1/folders/{id}/download/</td>
+                                <td>GET</td>
+                                <td>Download folder as ZIP</td>
+                                <td>include_subfolders</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>API Usage Examples</h4>
+                <div class="code-block">
+# Get authentication token
+curl -X POST /api/v1/auth/token/ \
+  -H "Content-Type: application/json" \
+  -d '{"username": "user", "password": "pass"}'
+
+# Upload files with token
+curl -X POST /api/v1/files/upload/ \
+  -H "Authorization: Token your_token_here" \
+  -F "files=@document.pdf" \
+  -F "is_public=true"
+
+# Download folder as ZIP
+curl -X GET /api/v1/folders/{folder_id}/download/ \
+  -H "Authorization: Token your_token_here" \
+  -o folder.zip
+                </div>
+
+                <h3>Web Interface AJAX Endpoints</h3>
+                <p>Internal endpoints used by the web interface:</p>
 
                 <div class="table-responsive">
                     <table class="table table-bordered">
@@ -847,32 +974,38 @@ Duplicate 3: document_3.pdf
                             <tr>
                                 <td>/api/folder/create/</td>
                                 <td>POST</td>
-                                <td>Create new folder</td>
-                                <td>Required</td>
+                                <td>Create new folder (web UI)</td>
+                                <td>Session</td>
                             </tr>
                             <tr>
                                 <td>/api/files/upload/</td>
                                 <td>POST</td>
-                                <td>Upload individual files</td>
-                                <td>Required</td>
+                                <td>Upload files (web UI)</td>
+                                <td>Session</td>
                             </tr>
                             <tr>
                                 <td>/api/folders/upload/</td>
                                 <td>POST</td>
-                                <td>Upload folder structures</td>
-                                <td>Required</td>
+                                <td>Upload folders (web UI)</td>
+                                <td>Session</td>
                             </tr>
                             <tr>
                                 <td>/api/item/delete/</td>
                                 <td>POST</td>
                                 <td>Delete files or folders</td>
-                                <td>Required</td>
+                                <td>Session</td>
                             </tr>
                             <tr>
                                 <td>/api/item/toggle-visibility/</td>
                                 <td>POST</td>
                                 <td>Change public/private status</td>
-                                <td>Required</td>
+                                <td>Session</td>
+                            </tr>
+                            <tr>
+                                <td>/api/search/</td>
+                                <td>GET</td>
+                                <td>Search files and folders</td>
+                                <td>Session</td>
                             </tr>
                         </tbody>
                     </table>
@@ -894,6 +1027,163 @@ File Download: /file/{file_id}/download/
 Map Viewer: /file/{file_id}/map/
 Public File: /public/file/{file_id}/
 Public Map: /public/file/{file_id}/map/
+                </div>
+            </section>
+
+            <section id="api-documentation">
+                <h2><i class="fas fa-book me-2"></i>API Documentation</h2>
+
+                <h3>Complete API Reference</h3>
+                <p>ADMA provides comprehensive token-based REST APIs for programmatic access to all system features. The complete API documentation includes detailed examples, error handling, and integration guides.</p>
+
+                <div class="feature-card">
+                    <h5><i class="fas fa-file-code me-2"></i>API Documentation File</h5>
+                    <p>The complete API documentation is available as a detailed markdown file in the project repository:</p>
+                    <div class="code-block">
+Location: /adma_geo/API_DOCUMENTATION.md
+Format: Markdown with code examples
+Content: 500+ lines of comprehensive documentation
+                    </div>
+                </div>
+
+                <h3>Key API Features</h3>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="feature-card">
+                            <h5><i class="fas fa-key me-2"></i>Token Authentication</h5>
+                            <ul>
+                                <li>Secure token-based authentication</li>
+                                <li>Create tokens via username/password</li>
+                                <li>Long-lived persistent tokens</li>
+                                <li>Management commands for token creation</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="feature-card">
+                            <h5><i class="fas fa-upload me-2"></i>File Operations</h5>
+                            <ul>
+                                <li>Upload single or multiple files</li>
+                                <li>Upload complete folder structures</li>
+                                <li>Download individual files</li>
+                                <li>Download folders as ZIP archives</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="feature-card">
+                            <h5><i class="fas fa-folder me-2"></i>Folder Management</h5>
+                            <ul>
+                                <li>List folders with filtering</li>
+                                <li>Get folder information and statistics</li>
+                                <li>Preserve folder hierarchy on upload</li>
+                                <li>Recursive subfolder inclusion</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="feature-card">
+                            <h5><i class="fas fa-cogs me-2"></i>Advanced Features</h5>
+                            <ul>
+                                <li>Comprehensive error handling</li>
+                                <li>Query parameter filtering</li>
+                                <li>JSON response format</li>
+                                <li>RESTful design principles</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <h3>API Usage Workflow</h3>
+                <div class="workflow-step">
+                    <span class="step-number">1</span>
+                    <strong>Authentication:</strong> Obtain API token using username and password via <code>POST /api/v1/auth/token/</code>
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">2</span>
+                    <strong>File Upload:</strong> Upload files using <code>POST /api/v1/files/upload/</code> with token authentication
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">3</span>
+                    <strong>File Management:</strong> List, filter, and manage files using <code>GET /api/v1/files/</code>
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">4</span>
+                    <strong>Download:</strong> Download files or folders using respective download endpoints
+                </div>
+
+                <h3>Python Integration Example</h3>
+                <div class="code-block">
+import requests
+
+# Get API token
+response = requests.post('http://localhost/api/v1/auth/token/', json={
+    'username': 'your_username',
+    'password': 'your_password'
+})
+token = response.json()['token']
+
+# Set headers for API calls
+headers = {'Authorization': f'Token {token}'}
+
+# Upload files
+with open('data.csv', 'rb') as f:
+    files = {'files': f}
+    data = {'is_public': 'true'}
+    response = requests.post(
+        'http://localhost/api/v1/files/upload/',
+        headers=headers,
+        files=files,
+        data=data
+    )
+
+# List files
+response = requests.get(
+    'http://localhost/api/v1/files/',
+    headers=headers
+)
+files = response.json()['files']
+
+# Download folder as ZIP
+response = requests.get(
+    'http://localhost/api/v1/folders/{folder_id}/download/',
+    headers=headers
+)
+with open('folder.zip', 'wb') as f:
+    f.write(response.content)
+                </div>
+
+                <div class="alert alert-tip">
+                    <i class="fas fa-lightbulb me-2"></i>
+                    <strong>Complete Documentation:</strong> For detailed API reference including all parameters, response formats, error codes, and advanced examples, refer to the <code>API_DOCUMENTATION.md</code> file in the project repository.
+                </div>
+
+                <h3>API Management Commands</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Command</th>
+                                <th>Purpose</th>
+                                <th>Example</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>create_api_token</td>
+                                <td>Create token for user</td>
+                                <td><code>python manage.py create_api_token username</code></td>
+                            </tr>
+                            <tr>
+                                <td>create_api_token --regenerate</td>
+                                <td>Regenerate existing token</td>
+                                <td><code>python manage.py create_api_token username --regenerate</code></td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
 

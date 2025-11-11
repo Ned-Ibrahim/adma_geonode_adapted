@@ -6,7 +6,8 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('accounts/', include('django.contrib.auth.urls')),
-    path('', include('filemanager.urls')),
+    path('api/v1/', include('filemanager.api_urls')),  # Token-based APIs
+    path('', include('filemanager.urls')),  # Web interface
 ]
 
 if settings.DEBUG:
