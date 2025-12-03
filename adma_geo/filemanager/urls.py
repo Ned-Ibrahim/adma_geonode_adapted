@@ -41,6 +41,10 @@ urlpatterns = [
     path('api/dashboard/stats/', views.dashboard_stats, name='dashboard_stats'),
     path('api/search/', views.search_api, name='search_api'),
     
+    # Seeding Tool endpoints
+    path('api/seeding-tool/run/', views.run_seeding_tool, name='run_seeding_tool'),
+    path('api/seeding-tool/status/<str:task_id>/', views.check_seeding_tool_status, name='check_seeding_tool_status'),
+    
     # Map AJAX endpoints
     path('api/maps/check-name/', map_views.check_map_name, name='check_map_name'),
     path('api/maps/<uuid:map_id>/available-layers/', map_views.get_available_layers, name='get_available_layers'),

@@ -375,3 +375,140 @@ def toggle_file_visibility_task(self, file_id, is_public, file_name):
         error_message = f"Error in async visibility toggle for {file_name}: {str(e)}"
         logger.error(error_message)
         return error_message
+
+
+@shared_task(bind=True)
+def run_seeding_tool_task(self, file_id):
+    """
+    Run the Seeding Tool on a .shp or .gpkg file.
+    
+    This task:
+    1. Reads the input Point layer
+    2. Creates seeding polygons (buffered by swath/boom width)
+    3. Creates boundary polygons
+    4. Generates a summary CSV
+    5. Saves output files in the same folder as the input file
+    6. Creates File records for the output files in Django
+    """
+    import django
+    django.setup()
+    
+    try:
+        from django.apps import apps
+        from django.conf import settings
+        import os
+        
+        File = apps.get_model('filemanager', 'File')
+        
+        logger.info(f"Starting Seeding Tool task for file ID: {file_id}")
+        
+        # Get the file object
+        try:
+            file_obj = File.objects.get(id=file_id)
+        except File.DoesNotExist:
+            logger.error(f"File with ID {file_id} not found")
+            return {"success": False, "error": f"File with ID {file_id} not found"}
+        
+        # Validate file type
+        file_ext = os.path.splitext(file_obj.name)[1].lower()
+        if file_ext not in ['.shp', '.gpkg']:
+            error_msg = f"Seeding Tool only supports .shp and .gpkg files, got: {file_ext}"
+            logger.error(error_msg)
+            return {"success": False, "error": error_msg}
+        
+        # Get the input file path
+        input_path = file_obj.file.path
+        
+        # Determine output directory (same as input file's parent folder)
+        output_dir = os.path.dirname(input_path)
+        
+        logger.info(f"Processing file: {input_path}")
+        logger.info(f"Output directory: {output_dir}")
+        
+        # Import and run the seeding tool
+        from .seeding_tool import process_seeding_tool
+        
+        success, message, output_files = process_seeding_tool(input_path, output_dir)
+        
+        if not success:
+            logger.error(f"Seeding Tool failed: {message}")
+            # Update file processing log
+            file_obj.processing_log = (file_obj.processing_log or "") + f"\n✗ Seeding Tool failed: {message}"
+            file_obj.save(update_fields=['processing_log'])
+            return {"success": False, "error": message}
+        
+        logger.info(f"Seeding Tool completed: {message}")
+        
+        # Create File records for the output files
+        created_files = []
+        
+        for file_type, file_path in output_files.items():
+            if os.path.exists(file_path):
+                try:
+                    # Calculate relative path for Django FileField
+                    media_root = settings.MEDIA_ROOT
+                    if file_path.startswith(str(media_root)):
+                        relative_path = os.path.relpath(file_path, media_root)
+                    else:
+                        relative_path = file_path
+                    
+                    file_name = os.path.basename(file_path)
+                    file_size = os.path.getsize(file_path)
+                    
+                    # Check if file already exists (by name and folder)
+                    existing_file = File.objects.filter(
+                        name=file_name,
+                        folder=file_obj.folder,
+                        owner=file_obj.owner
+                    ).first()
+                    
+                    if existing_file:
+                        # Update existing file
+                        existing_file.file_size = file_size
+                        existing_file.save(update_fields=['file_size', 'updated_at'])
+                        created_files.append({
+                            'name': file_name,
+                            'id': str(existing_file.id),
+                            'updated': True
+                        })
+                        logger.info(f"Updated existing file: {file_name}")
+                    else:
+                        # Create new file record
+                        new_file = File(
+                            name=file_name,
+                            folder=file_obj.folder,
+                            owner=file_obj.owner,
+                            file_size=file_size,
+                            is_public=file_obj.is_public,  # Inherit visibility from source file
+                        )
+                        # Set the file field to the relative path
+                        new_file.file.name = relative_path
+                        new_file.save()
+                        
+                        created_files.append({
+                            'name': file_name,
+                            'id': str(new_file.id),
+                            'updated': False
+                        })
+                        logger.info(f"Created new file record: {file_name}")
+                        
+                except Exception as e:
+                    logger.error(f"Error creating file record for {file_path}: {e}")
+        
+        # Update source file processing log
+        file_obj.processing_log = (file_obj.processing_log or "") + f"\n✓ Seeding Tool completed: {message}"
+        file_obj.save(update_fields=['processing_log'])
+        
+        result = {
+            "success": True,
+            "message": message,
+            "created_files": created_files,
+            "output_files": {k: os.path.basename(v) for k, v in output_files.items()}
+        }
+        
+        logger.info(f"Seeding Tool task completed successfully: {result}")
+        return result
+        
+    except Exception as e:
+        logger.exception(f"Error in Seeding Tool task for file {file_id}")
+        return {"success": False, "error": str(e)}

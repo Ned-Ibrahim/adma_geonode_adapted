@@ -1411,3 +1411,104 @@ def search_api(request):
             return JsonResponse({'suggestions': [], 'error': 'Internal search error'})
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@login_required
+def run_seeding_tool(request):
+    """
+    API endpoint to trigger the Seeding Tool on a .shp or .gpkg file.
+    
+    POST request with JSON body:
+    {
+        "file_id": "uuid-of-file"
+    }
+    
+    Returns:
+    {
+        "success": true/false,
+        "message": "...",
+        "task_id": "celery-task-id" (if async)
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        file_id = data.get('file_id')
+        
+        if not file_id:
+            return JsonResponse({'success': False, 'error': 'file_id is required'}, status=400)
+        
+        # Get the file object
+        try:
+            file_obj = File.objects.get(id=file_id)
+        except File.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'File not found'}, status=404)
+        
+        # Check permissions - user must be the owner
+        if file_obj.owner != request.user:
+            return JsonResponse({'success': False, 'error': 'Permission denied'}, status=403)
+        
+        # Validate file type
+        file_ext = os.path.splitext(file_obj.name)[1].lower()
+        if file_ext not in ['.shp', '.gpkg']:
+            return JsonResponse({
+                'success': False, 
+                'error': f'Seeding Tool only supports .shp and .gpkg files. Got: {file_ext}'
+            }, status=400)
+        
+        # Trigger the Celery task
+        from .tasks import run_seeding_tool_task
+        task = run_seeding_tool_task.delay(str(file_id))
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'Seeding Tool started for {file_obj.name}',
+            'task_id': task.id
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error running Seeding Tool: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+def check_seeding_tool_status(request, task_id):
+    """
+    Check the status of a Seeding Tool task.
+    
+    GET request returns:
+    {
+        "success": true,
+        "status": "PENDING" | "STARTED" | "SUCCESS" | "FAILURE",
+        "result": {...} (if completed)
+    }
+    """
+    try:
+        from celery.result import AsyncResult
+        
+        result = AsyncResult(task_id)
+        
+        response = {
+            'success': True,
+            'status': result.status,
+        }
+        
+        if result.ready():
+            if result.successful():
+                response['result'] = result.result
+            else:
+                response['error'] = str(result.result)
+        
+        return JsonResponse(response)
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error checking Seeding Tool status: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)

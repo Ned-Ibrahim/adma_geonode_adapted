@@ -290,6 +290,11 @@
                     {% endif %}
                     
                     {% if can_edit %}
+                    {% if file.name|lower|slice:"-4:" == ".shp" or file.name|lower|slice:"-5:" == ".gpkg" %}
+                    <button id="seeding-tool-btn" class="btn btn-warning" onclick="runSeedingTool()">
+                        <i class="fas fa-seedling me-2"></i>Seeding Tool
+                    </button>
+                    {% endif %}
                     <button class="btn btn-danger" onclick="deleteFile()">
                         <i class="fas fa-trash me-2"></i>Delete File
                     </button>
@@ -514,6 +519,99 @@ async function toggleVisibility() {
         button.innerHTML = '<i class="fas fa-exchange-alt me-1"></i>Toggle';
     }
 }
+
+// Seeding Tool functionality
+{% if file.name|lower|slice:"-4:" == ".shp" or file.name|lower|slice:"-5:" == ".gpkg" %}
+async function runSeedingTool() {
+    const button = document.getElementById('seeding-tool-btn');
+    
+    if (!confirm('Run Seeding Tool on "{{ file.name }}"?\n\nThis will create:\n- Seeding polygons shapefile\n- Boundary shapefile\n- Summary CSV\n\nThe output files will be saved in the same folder.')) {
+        return;
+    }
+    
+    // Disable button and show loading state
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Processing...';
+    
+    try {
+        // Start the Seeding Tool task
+        const response = await fetch('{% url "filemanager:run_seeding_tool" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken
+            },
+            body: JSON.stringify({
+                file_id: '{{ file.id }}'
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to start Seeding Tool');
+        }
+        
+        // Poll for task completion
+        const taskId = data.task_id;
+        showToast('success', 'Seeding Tool started. Processing...');
+        
+        // Poll status every 2 seconds
+        const pollStatus = async () => {
+            try {
+                const statusResponse = await fetch(`/api/seeding-tool/status/${taskId}/`);
+                const statusData = await statusResponse.json();
+                
+                if (statusData.status === 'SUCCESS') {
+                    // Task completed successfully
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
+                    
+                    if (statusData.result && statusData.result.success) {
+                        const outputFiles = statusData.result.output_files;
+                        const fileList = Object.values(outputFiles).join(', ');
+                        showToast('success', `Seeding Tool completed! Created: ${fileList}`);
+                        
+                        // Optionally reload the page to show new files in the folder
+                        setTimeout(() => {
+                            if (confirm('Seeding Tool completed successfully. Reload page to see new files?')) {
+                                window.location.reload();
+                            }
+                        }, 1000);
+                    } else {
+                        showToast('error', statusData.result?.error || 'Seeding Tool completed with errors');
+                    }
+                } else if (statusData.status === 'FAILURE') {
+                    // Task failed
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
+                    showToast('error', statusData.error || 'Seeding Tool failed');
+                } else if (statusData.status === 'PENDING' || statusData.status === 'STARTED') {
+                    // Still processing, continue polling
+                    setTimeout(pollStatus, 2000);
+                } else {
+                    // Unknown status
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
+                    showToast('error', `Unknown task status: ${statusData.status}`);
+                }
+            } catch (error) {
+                button.disabled = false;
+                button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
+                showToast('error', 'Error checking task status: ' + error.message);
+            }
+        };
+        
+        // Start polling
+        setTimeout(pollStatus, 2000);
+        
+    } catch (error) {
+        button.disabled = false;
+        button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
+        showToast('error', 'Error: ' + error.message);
+    }
+}
+{% endif %}
 {% endif %}
 
 // CSV/Spreadsheet Visualization functionality
