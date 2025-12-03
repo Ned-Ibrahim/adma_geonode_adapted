@@ -556,11 +556,34 @@ async function runSeedingTool() {
         const taskId = data.task_id;
         showToast('success', 'Seeding Tool started. Processing...');
         
-        // Poll status every 2 seconds
+        // Poll status every 3 seconds, max 60 attempts (3 minutes timeout)
+        let pollCount = 0;
+        const maxPolls = 60;
+        
         const pollStatus = async () => {
+            pollCount++;
+            console.log(`Polling seeding tool status (attempt ${pollCount}/${maxPolls}): ${taskId}`);
+            
+            // Timeout check
+            if (pollCount > maxPolls) {
+                button.disabled = false;
+                button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
+                showToast('error', 'Seeding Tool timed out. Check Celery logs for details.');
+                return;
+            }
+            
             try {
                 const statusResponse = await fetch(`/api/seeding-tool/status/${taskId}/`);
+                
+                if (!statusResponse.ok) {
+                    console.error('Status check failed:', statusResponse.status, statusResponse.statusText);
+                    // Continue polling on HTTP errors (might be temporary)
+                    setTimeout(pollStatus, 3000);
+                    return;
+                }
+                
                 const statusData = await statusResponse.json();
+                console.log('Status response:', statusData);
                 
                 if (statusData.status === 'SUCCESS') {
                     // Task completed successfully
@@ -585,25 +608,31 @@ async function runSeedingTool() {
                     // Task failed
                     button.disabled = false;
                     button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
-                    showToast('error', statusData.error || 'Seeding Tool failed');
+                    const errorMsg = statusData.error || (statusData.result ? String(statusData.result) : 'Seeding Tool failed');
+                    showToast('error', errorMsg);
                 } else if (statusData.status === 'PENDING' || statusData.status === 'STARTED') {
                     // Still processing, continue polling
-                    setTimeout(pollStatus, 2000);
+                    setTimeout(pollStatus, 3000);
                 } else {
-                    // Unknown status
-                    button.disabled = false;
-                    button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
-                    showToast('error', `Unknown task status: ${statusData.status}`);
+                    // Unknown status - might be a custom state, continue polling
+                    console.log('Unknown status, continuing to poll:', statusData.status);
+                    setTimeout(pollStatus, 3000);
                 }
             } catch (error) {
-                button.disabled = false;
-                button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
-                showToast('error', 'Error checking task status: ' + error.message);
+                console.error('Error polling status:', error);
+                // Continue polling on network errors (might be temporary)
+                if (pollCount < maxPolls) {
+                    setTimeout(pollStatus, 3000);
+                } else {
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-seedling me-2"></i>Seeding Tool';
+                    showToast('error', 'Error checking task status: ' + error.message);
+                }
             }
         };
         
-        // Start polling
-        setTimeout(pollStatus, 2000);
+        // Start polling after 3 seconds
+        setTimeout(pollStatus, 3000);
         
     } catch (error) {
         button.disabled = false;

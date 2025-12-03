@@ -390,16 +390,10 @@ def run_seeding_tool_task(self, file_id):
     5. Saves output files in the same folder as the input file
     6. Creates File records for the output files in Django
     """
-    import django
-    django.setup()
+    from django.conf import settings
+    import os
     
     try:
-        from django.apps import apps
-        from django.conf import settings
-        import os
-        
-        File = apps.get_model('filemanager', 'File')
-        
         logger.info(f"Starting Seeding Tool task for file ID: {file_id}")
         
         # Get the file object
