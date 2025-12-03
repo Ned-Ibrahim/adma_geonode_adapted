@@ -11,6 +11,12 @@ crispy-bootstrap5>=0.7
 # Basic dependencies for spatial functionality
 requests>=2.28.0
 
+# GIS/Spatial processing for Seeding Tool
+geopandas>=0.14.0
+fiona>=1.9.0
+shapely>=2.0.0
+pyproj>=3.6.0
+
 # Django REST Framework for API authentication
 djangorestframework>=3.14.0
 djangorestframework-simplejwt>=5.3.0
