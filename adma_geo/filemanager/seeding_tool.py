@@ -212,6 +212,70 @@ def save_shapefile(gdf: gpd.GeoDataFrame, out_path: str) -> str:
 
 
 # =========================
+# Validation helpers
+# =========================
+
+def validate_seeding_data(gdf: gpd.GeoDataFrame) -> Tuple[bool, str, dict]:
+    """
+    Validate that a GeoDataFrame has the required columns for seeding tool processing.
+    
+    Returns:
+        Tuple of (is_valid, error_message, column_info)
+    """
+    if gdf is None or gdf.empty:
+        return False, "No data found in file", {}
+    
+    # Check geometry type
+    geom_types = gdf.geometry.geom_type.unique()
+    if 'Point' not in geom_types:
+        return False, f"Seeding Tool requires Point geometries. Found: {', '.join(geom_types)}", {}
+    
+    columns = [c.lower() for c in gdf.columns]
+    column_info = {
+        'available_columns': list(gdf.columns),
+        'product_column': None,
+        'width_column': None,
+        'rate_column': None,
+    }
+    
+    # Check for Product column
+    product_col = None
+    for c in gdf.columns:
+        if c.lower() == 'product':
+            product_col = c
+            column_info['product_column'] = c
+            break
+    
+    if not product_col:
+        return False, (
+            f"Missing required 'Product' column. "
+            f"Available columns: {', '.join(gdf.columns[:10])}{'...' if len(gdf.columns) > 10 else ''}"
+        ), column_info
+    
+    # Check for swath/width/boom column
+    width_col = None
+    for c in gdf.columns:
+        if any(k in c.lower() for k in ['swath', 'width', 'boom']):
+            width_col = c
+            column_info['width_column'] = c
+            break
+    
+    if not width_col:
+        return False, (
+            f"Missing required swath/width/boom column. "
+            f"Available columns: {', '.join(gdf.columns[:10])}{'...' if len(gdf.columns) > 10 else ''}"
+        ), column_info
+    
+    # Check for rate column (optional)
+    for c in gdf.columns:
+        if c.lower() in {'appliedrate', 'appliedrat', 'rate'}:
+            column_info['rate_column'] = c
+            break
+    
+    return True, "Valid seeding data", column_info
+
+
+# =========================
 # File reading helpers
 # =========================
 
@@ -261,10 +325,31 @@ def process_seeding_tool(input_path: str, output_dir: str) -> Tuple[bool, str, D
     output_files = {}
     
     try:
-        # Read the input file
-        gdf = read_first_point_layer(input_path)
-        if gdf is None:
-            return False, "No readable Point layer found in the file. Seeding Tool requires Point geometries.", {}
+        # Read the input file - try to read any layer first for validation
+        try:
+            gdf = gpd.read_file(input_path)
+        except Exception as e:
+            return False, f"Could not read file: {str(e)}", {}
+        
+        if gdf is None or gdf.empty:
+            return False, "File is empty or could not be read.", {}
+        
+        # Validate the data has required columns
+        is_valid, validation_msg, column_info = validate_seeding_data(gdf)
+        if not is_valid:
+            return False, (
+                f"This file is not compatible with the Seeding Tool. {validation_msg}. "
+                f"The Seeding Tool requires Point data with 'Product' and 'swath/width/boom' columns "
+                f"(typically from seeding/application equipment)."
+            ), {}
+        
+        # Now check if it's Point geometry
+        if not np.all(gdf.geometry.geom_type == "Point"):
+            geom_types = gdf.geometry.geom_type.unique()
+            return False, (
+                f"Seeding Tool requires Point geometries. "
+                f"This file contains: {', '.join(geom_types)}."
+            ), {}
 
         # Get base name for output files
         base_name = os.path.splitext(os.path.basename(input_path))[0]
