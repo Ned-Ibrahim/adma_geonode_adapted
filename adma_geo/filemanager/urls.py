@@ -45,6 +45,9 @@ urlpatterns = [
     path('api/seeding-tool/run/', views.run_seeding_tool, name='run_seeding_tool'),
     path('api/seeding-tool/status/<str:task_id>/', views.check_seeding_tool_status, name='check_seeding_tool_status'),
     
+    # File management endpoints
+    path('api/file/rename/', views.rename_file, name='rename_file'),
+    
     # Map AJAX endpoints
     path('api/maps/check-name/', map_views.check_map_name, name='check_map_name'),
     path('api/maps/<uuid:map_id>/available-layers/', map_views.get_available_layers, name='get_available_layers'),

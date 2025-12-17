@@ -289,12 +289,22 @@
                         {% endif %}
                     {% endif %}
                     
-                    {% if can_edit %}
                     {% if file.name|lower|slice:"-4:" == ".shp" or file.name|lower|slice:"-5:" == ".gpkg" %}
+                    {% if user.is_authenticated %}
                     <button id="seeding-tool-btn" class="btn btn-warning" onclick="runSeedingTool()">
                         <i class="fas fa-seedling me-2"></i>Seeding Tool
                     </button>
+                    {% else %}
+                    <a href="{% url 'account_login' %}?next={{ request.path }}" class="btn btn-warning">
+                        <i class="fas fa-seedling me-2"></i>Seeding Tool (Login Required)
+                    </a>
                     {% endif %}
+                    {% endif %}
+                    
+                    {% if can_edit %}
+                    <button class="btn btn-outline-info" onclick="openRenameModal()">
+                        <i class="fas fa-edit me-2"></i>Change Name
+                    </button>
                     <button class="btn btn-danger" onclick="deleteFile()">
                         <i class="fas fa-trash me-2"></i>Delete File
                     </button>
@@ -337,6 +347,37 @@
 </div>
 {% endif %}
 
+<!-- Rename File Modal -->
+{% if can_edit %}
+<div class="modal fade" id="renameModal" tabindex="-1" aria-labelledby="renameModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="renameModalLabel">
+                    <i class="fas fa-edit me-2"></i>Change File Name
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="renameForm">
+                    <div class="mb-3">
+                        <label for="newFileName" class="form-label">New File Name</label>
+                        <input type="text" class="form-control" id="newFileName" value="{{ file.name }}" required>
+                        <div class="form-text">Enter the new name for the file (including extension).</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="confirmRenameBtn" onclick="renameFile()">
+                    <i class="fas fa-save me-2"></i>Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 {% endblock %}
 
 
@@ -368,6 +409,67 @@ function openImageModal() {
 {% endif %}
 
 {% if can_edit %}
+// Rename file functionality
+function openRenameModal() {
+    const modal = new bootstrap.Modal(document.getElementById('renameModal'));
+    // Reset the input to current file name
+    document.getElementById('newFileName').value = '{{ file.name }}';
+    modal.show();
+}
+
+async function renameFile() {
+    const newName = document.getElementById('newFileName').value.trim();
+    const confirmBtn = document.getElementById('confirmRenameBtn');
+    
+    if (!newName) {
+        alert('Please enter a file name');
+        return;
+    }
+    
+    if (newName === '{{ file.name }}') {
+        // Name hasn't changed, just close the modal
+        bootstrap.Modal.getInstance(document.getElementById('renameModal')).hide();
+        return;
+    }
+    
+    // Disable button and show loading state
+    confirmBtn.disabled = true;
+    confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Saving...';
+    
+    try {
+        const response = await fetch('{% url "filemanager:rename_file" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken
+            },
+            body: JSON.stringify({
+                file_id: '{{ file.id }}',
+                new_name: newName
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Close modal and reload page to show new name
+            bootstrap.Modal.getInstance(document.getElementById('renameModal')).hide();
+            showToast('success', 'File renamed successfully');
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        } else {
+            alert(data.error || 'Error renaming file');
+        }
+    } catch (error) {
+        alert('Error renaming file: ' + error.message);
+    } finally {
+        // Re-enable button
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = '<i class="fas fa-save me-2"></i>Save Changes';
+    }
+}
+
 async function deleteFile() {
     if (!confirm('Are you sure you want to delete "{{ file.name }}"?')) return;
     
@@ -520,12 +622,56 @@ async function toggleVisibility() {
     }
 }
 
-// Seeding Tool functionality
+{% endif %}
+
+// Seeding Tool functionality - available for any authenticated user on .shp/.gpkg files
 {% if file.name|lower|slice:"-4:" == ".shp" or file.name|lower|slice:"-5:" == ".gpkg" %}
+{% if user.is_authenticated %}
+// Toast notification function for seeding tool (if not already defined)
+if (typeof showToast === 'undefined') {
+    function showToast(type, message) {
+        let toastContainer = document.getElementById('toast-container');
+        if (!toastContainer) {
+            toastContainer = document.createElement('div');
+            toastContainer.id = 'toast-container';
+            toastContainer.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 9999;
+                max-width: 350px;
+            `;
+            document.body.appendChild(toastContainer);
+        }
+        
+        const toast = document.createElement('div');
+        const bgClass = type === 'success' ? 'bg-success' : 'bg-danger';
+        toast.className = `alert ${bgClass} text-white alert-dismissible fade show mb-2`;
+        toast.style.cssText = `
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        `;
+        
+        toast.innerHTML = \`
+            <strong>\${type === 'success' ? '✅' : '❌'}</strong> \${message}
+            <button type="button" class="btn-close btn-close-white" onclick="this.parentElement.remove()"></button>
+        \`;
+        
+        toastContainer.appendChild(toast);
+        
+        setTimeout(() => {
+            if (toast.parentElement) {
+                toast.remove();
+            }
+        }, 5000);
+    }
+}
+
 async function runSeedingTool() {
     const button = document.getElementById('seeding-tool-btn');
     
-    if (!confirm('Run Seeding Tool on "{{ file.name }}"?\n\nThis will create:\n- Seeding polygons shapefile\n- Boundary shapefile\n- Summary CSV\n\nThe output files will be saved in the same folder.')) {
+    if (!confirm('Run Seeding Tool on "{{ file.name }}"?\n\nThis will create:\n- Seeding polygons shapefile\n- Boundary shapefile\n- Summary CSV\n\nThe output files will be saved in your account.')) {
         return;
     }
     

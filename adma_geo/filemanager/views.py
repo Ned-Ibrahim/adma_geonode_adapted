@@ -1446,8 +1446,8 @@ def run_seeding_tool(request):
         except File.DoesNotExist:
             return JsonResponse({'success': False, 'error': 'File not found'}, status=404)
         
-        # Check permissions - user must be the owner
-        if file_obj.owner != request.user:
+        # Check permissions - user must be owner OR file must be public
+        if file_obj.owner != request.user and not file_obj.is_public:
             return JsonResponse({'success': False, 'error': 'Permission denied'}, status=403)
         
         # Validate file type
@@ -1511,4 +1511,90 @@ def check_seeding_tool_status(request, task_id):
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Error checking Seeding Tool status: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+def rename_file(request):
+    """
+    API endpoint to rename a file.
+    
+    POST request with JSON body:
+    {
+        "file_id": "uuid-of-file",
+        "new_name": "new_filename.ext"
+    }
+    
+    Returns:
+    {
+        "success": true/false,
+        "message": "...",
+        "new_name": "..." (if successful)
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        file_id = data.get('file_id')
+        new_name = data.get('new_name', '').strip()
+        
+        if not file_id:
+            return JsonResponse({'success': False, 'error': 'file_id is required'}, status=400)
+        
+        if not new_name:
+            return JsonResponse({'success': False, 'error': 'new_name is required'}, status=400)
+        
+        # Get the file object
+        try:
+            file_obj = File.objects.get(id=file_id)
+        except File.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'File not found'}, status=404)
+        
+        # Check permissions - only owner can rename
+        if file_obj.owner != request.user:
+            return JsonResponse({'success': False, 'error': 'Permission denied. Only the owner can rename this file.'}, status=403)
+        
+        # Validate new name
+        if '/' in new_name or '\\' in new_name:
+            return JsonResponse({'success': False, 'error': 'File name cannot contain slashes'}, status=400)
+        
+        if len(new_name) > 255:
+            return JsonResponse({'success': False, 'error': 'File name is too long (max 255 characters)'}, status=400)
+        
+        # Check if a file with the same name already exists in the same folder
+        existing_file = File.objects.filter(
+            name=new_name,
+            folder=file_obj.folder,
+            owner=file_obj.owner
+        ).exclude(id=file_obj.id).first()
+        
+        if existing_file:
+            return JsonResponse({
+                'success': False, 
+                'error': f'A file named "{new_name}" already exists in this folder'
+            }, status=400)
+        
+        # Update the file name
+        old_name = file_obj.name
+        file_obj.name = new_name
+        file_obj.save(update_fields=['name', 'updated_at'])
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"File renamed: '{old_name}' -> '{new_name}' by user {request.user.username}")
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'File renamed from "{old_name}" to "{new_name}"',
+            'new_name': new_name
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error renaming file: {e}")
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
