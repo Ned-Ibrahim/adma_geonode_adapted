@@ -350,15 +350,16 @@ def api_download_file(request, file_id):
 @permission_classes([IsAuthenticated])
 def api_list_files(request):
     """
-    List user's files via token-based API.
+    List files via token-based API.
     
     GET /api/v1/files/
     Authorization: Token your_api_token
     
     Query parameters:
-    - folder_id: Filter by folder (optional)
+    - folder_id: Filter by folder (optional) - can list public folders owned by others
     - is_public: Filter by public status (optional)
     - file_type: Filter by file type (optional)
+    - include_public: If 'true', include public files from other users (default: false)
     
     Returns:
     {
@@ -375,14 +376,42 @@ def api_list_files(request):
         "count": 10
     }
     """
-    # Start with user's files
-    queryset = File.objects.filter(owner=request.user)
+    from django.db.models import Q
     
-    # Apply filters
     folder_id = request.query_params.get('folder_id')
-    if folder_id:
-        queryset = queryset.filter(folder_id=folder_id)
+    include_public = request.query_params.get('include_public', 'false').lower() in ('true', '1', 'yes')
     
+    # If folder_id is specified, check if user can access that folder
+    if folder_id:
+        try:
+            folder = Folder.objects.get(id=folder_id)
+            # User can access if they own the folder OR the folder is public
+            if folder.owner != request.user and not folder.is_public:
+                return Response(
+                    {'error': 'You do not have permission to access this folder'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            # List files in this folder (user's own files OR public files in public folder)
+            if folder.owner == request.user:
+                queryset = File.objects.filter(folder_id=folder_id, owner=request.user)
+            else:
+                # For public folders owned by others, only show public files
+                queryset = File.objects.filter(folder_id=folder_id, is_public=True)
+        except Folder.DoesNotExist:
+            return Response(
+                {'error': 'Folder not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    else:
+        # No folder specified - list user's own files
+        if include_public:
+            # Include user's files AND all public files
+            queryset = File.objects.filter(Q(owner=request.user) | Q(is_public=True))
+        else:
+            # Only user's own files
+            queryset = File.objects.filter(owner=request.user)
+    
+    # Apply additional filters
     is_public = request.query_params.get('is_public')
     if is_public is not None:
         is_public_bool = is_public.lower() in ('true', '1', 'yes')
@@ -405,14 +434,15 @@ def api_list_files(request):
 @permission_classes([IsAuthenticated])
 def api_list_folders(request):
     """
-    List user's folders via token-based API.
+    List folders via token-based API.
     
     GET /api/v1/folders/
     Authorization: Token your_api_token
     
     Query parameters:
-    - parent_id: Filter by parent folder (optional)
+    - parent_id: Filter by parent folder (optional) - can list subfolders of public folders
     - is_public: Filter by public status (optional)
+    - include_public: If 'true', include public folders from other users (default: false)
     
     Returns:
     {
@@ -427,14 +457,42 @@ def api_list_folders(request):
         "count": 5
     }
     """
-    # Start with user's folders
-    queryset = Folder.objects.filter(owner=request.user)
+    from django.db.models import Q
     
-    # Apply filters
     parent_id = request.query_params.get('parent_id')
-    if parent_id:
-        queryset = queryset.filter(parent_id=parent_id)
+    include_public = request.query_params.get('include_public', 'false').lower() in ('true', '1', 'yes')
     
+    # If parent_id is specified, check if user can access that parent folder
+    if parent_id:
+        try:
+            parent_folder = Folder.objects.get(id=parent_id)
+            # User can access if they own the folder OR the folder is public
+            if parent_folder.owner != request.user and not parent_folder.is_public:
+                return Response(
+                    {'error': 'You do not have permission to access this folder'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            # List subfolders in this parent folder
+            if parent_folder.owner == request.user:
+                queryset = Folder.objects.filter(parent_id=parent_id, owner=request.user)
+            else:
+                # For public folders owned by others, only show public subfolders
+                queryset = Folder.objects.filter(parent_id=parent_id, is_public=True)
+        except Folder.DoesNotExist:
+            return Response(
+                {'error': 'Parent folder not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    else:
+        # No parent specified - list root folders
+        if include_public:
+            # Include user's folders AND all public folders
+            queryset = Folder.objects.filter(Q(owner=request.user) | Q(is_public=True)).filter(parent__isnull=True)
+        else:
+            # Only user's own root folders
+            queryset = Folder.objects.filter(owner=request.user, parent__isnull=True)
+    
+    # Apply additional filters
     is_public = request.query_params.get('is_public')
     if is_public is not None:
         is_public_bool = is_public.lower() in ('true', '1', 'yes')

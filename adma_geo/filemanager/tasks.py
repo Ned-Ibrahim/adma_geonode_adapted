@@ -378,7 +378,7 @@ def toggle_file_visibility_task(self, file_id, is_public, file_name):
 
 
 @shared_task(bind=True)
-def run_seeding_tool_task(self, file_id):
+def run_seeding_tool_task(self, file_id, output_dir_id=None):
     """
     Run the Seeding Tool on a .shp or .gpkg file.
     
@@ -387,8 +387,13 @@ def run_seeding_tool_task(self, file_id):
     2. Creates seeding polygons (buffered by swath/boom width)
     3. Creates boundary polygons
     4. Generates a summary CSV
-    5. Saves output files in the same folder as the input file
+    5. Saves output files in the specified output directory or creates 'seeding_tool_output' folder
     6. Creates File records for the output files in Django
+    
+    Args:
+        file_id: ID of the input File object
+        output_dir_id: Optional ID of the Folder object for output. If not specified,
+                       creates a 'seeding_tool_output' subdirectory in the input file's folder.
     """
     from django.conf import settings
     import os
@@ -413,14 +418,29 @@ def run_seeding_tool_task(self, file_id):
         # Get the input file path
         input_path = file_obj.file.path
         
-        # Determine output directory (same as input file's parent folder)
-        output_dir = os.path.dirname(input_path)
+        # Determine output directory
+        if output_dir_id:
+            # Use specified output folder
+            try:
+                from .models import Folder
+                output_folder = Folder.objects.get(id=output_dir_id)
+                output_dir = output_folder.get_full_path()
+            except Folder.DoesNotExist:
+                logger.error(f"Output folder with ID {output_dir_id} not found")
+                return {"success": False, "error": f"Output folder with ID {output_dir_id} not found"}
+        else:
+            # Create 'seeding_tool_output' subdirectory in input file's folder
+            input_file_dir = os.path.dirname(input_path)
+            output_dir = os.path.join(input_file_dir, "seeding_tool_output")
+        
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
         
         logger.info(f"Processing file: {input_path}")
         logger.info(f"Output directory: {output_dir}")
         
         # Import and run the seeding tool
-        from .seeding_tool import process_seeding_tool
+        from .SeedingTool_asappled_single_ADMA_V1 import process_seeding_tool
         
         success, message, output_files = process_seeding_tool(input_path, output_dir)
         
