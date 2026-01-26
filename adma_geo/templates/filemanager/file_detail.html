@@ -624,8 +624,8 @@ async function toggleVisibility() {
 
 {% endif %}
 
-// Seeding Tool functionality - available for any authenticated user on .shp/.gpkg files
-{% if file.name|lower|slice:"-4:" == ".shp" or file.name|lower|slice:"-5:" == ".gpkg" %}
+// Seeding Tool functionality - available for any authenticated user on spatial files
+// DEBUG: user.is_authenticated = {{ user.is_authenticated }}
 {% if user.is_authenticated %}
 // Toast notification function for seeding tool (if not already defined)
 if (typeof showToast === 'undefined') {
@@ -653,10 +653,10 @@ if (typeof showToast === 'undefined') {
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         `;
         
-        toast.innerHTML = \`
-            <strong>\${type === 'success' ? '✅' : '❌'}</strong> \${message}
+        toast.innerHTML = `
+            <strong>${type === 'success' ? '✅' : '❌'}</strong> ${message}
             <button type="button" class="btn-close btn-close-white" onclick="this.parentElement.remove()"></button>
-        \`;
+        `;
         
         toastContainer.appendChild(toast);
         
@@ -786,7 +786,6 @@ async function runSeedingTool() {
         showToast('error', 'Error: ' + error.message);
     }
 }
-{% endif %}
 {% endif %}
 
 // CSV/Spreadsheet Visualization functionality
