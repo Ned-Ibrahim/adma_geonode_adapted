@@ -43,6 +43,22 @@ class Folder(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='folders')
     is_public = models.BooleanField(default=False, help_text="Public folders are visible to everyone")
     deletion_in_progress = models.BooleanField(default=False, help_text="True when folder is being deleted asynchronously")
+    
+    # Third-party integration
+    is_third_party = models.BooleanField(default=False, help_text="True if this folder is from a third-party platform")
+    third_party_source = models.CharField(
+        max_length=100, 
+        blank=True, 
+        null=True,
+        help_text="Name of the third-party platform (e.g., 'Google Drive', 'Dropbox', 'AWS S3')"
+    )
+    third_party_id = models.CharField(
+        max_length=255, 
+        blank=True, 
+        null=True,
+        help_text="Unique identifier from the third-party platform"
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -137,6 +153,31 @@ class Folder(models.Model):
         """Get total count of subfolders in this folder"""
         return self.subfolders.count()
     
+    @property
+    def total_file_count(self):
+        """Get total count of all files recursively (including subfolders)"""
+        count = self.files.count()
+        for subfolder in self.subfolders.all():
+            count += subfolder.total_file_count
+        return count
+    
+    @property
+    def content_summary(self):
+        """Get a summary of folder contents for display (e.g., '3 folders, 81 files')"""
+        subfolder_count = self.subfolder_count
+        direct_file_count = self.file_count
+        total_files = self.total_file_count
+        
+        parts = []
+        if subfolder_count > 0:
+            parts.append(f"{subfolder_count} folder{'s' if subfolder_count != 1 else ''}")
+        if total_files > 0:
+            parts.append(f"{total_files} file{'s' if total_files != 1 else ''}")
+        
+        if not parts:
+            return "Empty"
+        return ", ".join(parts)
+    
     def delete(self, *args, **kwargs):
         """Override delete to clean up ChromaDB embeddings recursively"""
         # Manually delete all subfolders and files to ensure their delete() methods are called
@@ -172,6 +213,27 @@ class File(models.Model):
     mime_type = models.CharField(max_length=100, blank=True)
     is_public = models.BooleanField(default=False, help_text="Public files are visible to everyone")
     deletion_in_progress = models.BooleanField(default=False, help_text="True when file is being deleted asynchronously")
+    
+    # Third-party integration
+    is_third_party = models.BooleanField(default=False, help_text="True if this file is from a third-party platform")
+    third_party_source = models.CharField(
+        max_length=100, 
+        blank=True, 
+        null=True,
+        help_text="Name of the third-party platform (e.g., 'Google Drive', 'Dropbox', 'AWS S3')"
+    )
+    third_party_id = models.CharField(
+        max_length=255, 
+        blank=True, 
+        null=True,
+        help_text="Unique identifier from the third-party platform"
+    )
+    third_party_url = models.URLField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text="URL to the file on the third-party platform"
+    )
     
     # GIS-specific fields
     is_spatial = models.BooleanField(default=False, help_text="Whether this is a spatial/GIS file")
@@ -641,3 +703,287 @@ class MapLayer(models.Model):
         """Get the full workspace:layer name for GeoServer"""
         workspace = self.geoserver_workspace or 'adma_geo'
         return f"{workspace}:{self.geoserver_layer_name}"
+
+
+class Tool(models.Model):
+    """
+    Model to store tools (processing scripts) that users can run on their data.
+    Supports both system tools and user-uploaded tools.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, help_text="Display name of the tool")
+    slug = models.SlugField(max_length=100, unique=True, help_text="URL-friendly identifier (e.g., 'seeding-tool')")
+    description = models.TextField(blank=True, help_text="Detailed description of what the tool does")
+    short_description = models.CharField(max_length=500, blank=True, help_text="Brief description for list views")
+    
+    # Ownership and visibility
+    owner = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name='tools',
+        null=True,
+        blank=True,
+        help_text="Owner of the tool (null for system tools)"
+    )
+    is_system_tool = models.BooleanField(
+        default=False, 
+        help_text="System tools are built-in and cannot be deleted by users"
+    )
+    is_public = models.BooleanField(
+        default=False, 
+        help_text="Public tools are visible to all users"
+    )
+    is_active = models.BooleanField(
+        default=True, 
+        help_text="Inactive tools are hidden from the tools list"
+    )
+    
+    # Tool categorization
+    CATEGORY_CHOICES = [
+        ('gis_processing', 'GIS Processing'),
+        ('format_conversion', 'Format Conversion'),
+        ('analysis', 'Analysis'),
+        ('visualization', 'Visualization'),
+        ('data_management', 'Data Management'),
+        ('other', 'Other'),
+    ]
+    category = models.CharField(
+        max_length=50, 
+        choices=CATEGORY_CHOICES, 
+        default='other',
+        help_text="Category for organizing tools"
+    )
+    
+    # UI customization
+    ICON_COLOR_CHOICES = [
+        ('primary', 'Primary (Blue)'),
+        ('secondary', 'Secondary (Gray)'),
+        ('success', 'Success (Green)'),
+        ('danger', 'Danger (Red)'),
+        ('warning', 'Warning (Yellow)'),
+        ('info', 'Info (Cyan)'),
+        ('dark', 'Dark'),
+    ]
+    icon = models.CharField(
+        max_length=100, 
+        default='fa-tools',
+        help_text="FontAwesome icon class (e.g., 'fa-seedling')"
+    )
+    icon_color = models.CharField(
+        max_length=20, 
+        choices=ICON_COLOR_CHOICES, 
+        default='primary',
+        help_text="Bootstrap color class for the icon"
+    )
+    
+    # Tool execution configuration
+    url_name = models.CharField(
+        max_length=255, 
+        blank=True,
+        help_text="Django URL name for the tool page (e.g., 'filemanager:seeding_tool')"
+    )
+    celery_task_name = models.CharField(
+        max_length=255, 
+        blank=True,
+        help_text="Celery task name for async execution (e.g., 'filemanager.tasks.run_seeding_tool_task')"
+    )
+    
+    # Input/output configuration (stored as JSON)
+    input_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="JSON configuration for tool inputs (file types, required fields, etc.)"
+    )
+    output_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="JSON configuration for tool outputs (file types, naming conventions, etc.)"
+    )
+    
+    # Tool status
+    STATUS_CHOICES = [
+        ('available', 'Available'),
+        ('coming_soon', 'Coming Soon'),
+        ('beta', 'Beta'),
+        ('deprecated', 'Deprecated'),
+        ('maintenance', 'Under Maintenance'),
+    ]
+    status = models.CharField(
+        max_length=20, 
+        choices=STATUS_CHOICES, 
+        default='available',
+        help_text="Current status of the tool"
+    )
+    
+    # Version tracking
+    version = models.CharField(
+        max_length=50, 
+        default='1.0.0',
+        help_text="Tool version number"
+    )
+    
+    # Usage tracking
+    usage_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of times this tool has been executed"
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['category', 'name']
+        verbose_name = 'Tool'
+        verbose_name_plural = 'Tools'
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        """Get the URL for this tool's page"""
+        if self.url_name:
+            try:
+                return reverse(self.url_name)
+            except Exception:
+                pass
+        return reverse('filemanager:tools_list')
+
+    def increment_usage(self):
+        """Increment the usage counter"""
+        self.usage_count += 1
+        self.save(update_fields=['usage_count'])
+
+    def get_metadata_for_embedding(self):
+        """Generate metadata text for embedding/search"""
+        metadata_parts = [
+            f"Tool: {self.name}",
+            f"Category: {self.get_category_display()}",
+            f"Status: {self.get_status_display()}",
+        ]
+        
+        if self.short_description:
+            metadata_parts.append(f"Description: {self.short_description}")
+        elif self.description:
+            metadata_parts.append(f"Description: {self.description[:200]}")
+        
+        if self.owner:
+            metadata_parts.append(f"Owner: {self.owner.username}")
+        else:
+            metadata_parts.append("Type: System Tool")
+        
+        metadata_parts.append(f"Visibility: {'Public' if self.is_public else 'Private'}")
+        metadata_parts.append(f"Version: {self.version}")
+        metadata_parts.append(f"Usage count: {self.usage_count}")
+        
+        return " | ".join(metadata_parts)
+
+    @classmethod
+    def get_available_tools_for_user(cls, user):
+        """
+        Get all tools available to a specific user.
+        Includes: system tools, public tools, and user's own tools.
+        """
+        from django.db.models import Q
+        
+        if user.is_authenticated:
+            return cls.objects.filter(
+                Q(is_system_tool=True) |
+                Q(is_public=True) |
+                Q(owner=user),
+                is_active=True
+            ).exclude(status='deprecated')
+        else:
+            # Anonymous users only see public system tools
+            return cls.objects.filter(
+                is_system_tool=True,
+                is_public=True,
+                is_active=True
+            ).exclude(status='deprecated')
+
+    @classmethod
+    def create_system_tools(cls):
+        """
+        Create or update the built-in system tools.
+        Call this during migrations or management commands.
+        """
+        system_tools = [
+            {
+                'slug': 'seeding-tool',
+                'name': 'Seeding Tool',
+                'short_description': 'Process point shapefiles to create seeding polygons, boundaries, and summary statistics.',
+                'description': 'The Seeding Tool processes point shapefiles containing seeding data to generate '
+                              'polygons, boundary files, and comprehensive summary statistics. It supports '
+                              '.shp and .gpkg file formats.',
+                'category': 'gis_processing',
+                'icon': 'fa-seedling',
+                'icon_color': 'warning',
+                'url_name': 'filemanager:seeding_tool',
+                'celery_task_name': 'filemanager.tasks.run_seeding_tool_task',
+                'status': 'available',
+                'input_config': {
+                    'accepted_extensions': ['.shp', '.gpkg'],
+                    'required_fields': [],
+                },
+                'output_config': {
+                    'generates': ['polygons', 'boundaries', 'statistics'],
+                },
+            },
+            {
+                'slug': 'shape-to-json',
+                'name': 'Shape to JSON',
+                'short_description': 'Convert shapefiles to GeoJSON format for web mapping applications.',
+                'description': 'Convert ESRI Shapefiles (.shp) to GeoJSON format, making them suitable for '
+                              'web mapping applications, JavaScript libraries like Leaflet, and modern GIS workflows.',
+                'category': 'format_conversion',
+                'icon': 'fa-exchange-alt',
+                'icon_color': 'primary',
+                'url_name': 'filemanager:shape_to_json_tool',
+                'celery_task_name': 'filemanager.tasks.run_shape_to_json_task',
+                'status': 'available',
+                'input_config': {
+                    'accepted_extensions': ['.shp'],
+                    'required_fields': [],
+                },
+                'output_config': {
+                    'generates': ['geojson'],
+                    'extension': '.geojson',
+                },
+            },
+            {
+                'slug': 'si-tool',
+                'name': 'SI Tool',
+                'short_description': 'Calculate Stress Index values from NDRE and buffer sector data.',
+                'description': 'The SI (Stress Index) Tool calculates stress index values by combining '
+                              'NDRE (Normalized Difference Red Edge) imagery data with buffer sector shapefiles. '
+                              'Useful for agricultural analysis and crop health monitoring.',
+                'category': 'analysis',
+                'icon': 'fa-chart-line',
+                'icon_color': 'success',
+                'url_name': 'filemanager:si_tool',
+                'celery_task_name': 'filemanager.tasks.run_si_tool_task',
+                'status': 'available',
+                'input_config': {
+                    'accepted_extensions': ['.shp', '.csv'],
+                    'required_inputs': ['buffer_sectors_shp', 'ndre_csv'],
+                },
+                'output_config': {
+                    'generates': ['shapefile_with_si'],
+                },
+            },
+        ]
+        
+        created_tools = []
+        for tool_data in system_tools:
+            tool, created = cls.objects.update_or_create(
+                slug=tool_data['slug'],
+                defaults={
+                    **tool_data,
+                    'is_system_tool': True,
+                    'is_public': True,
+                    'owner': None,
+                }
+            )
+            created_tools.append((tool, created))
+        
+        return created_tools

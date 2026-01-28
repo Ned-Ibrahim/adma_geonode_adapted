@@ -12,7 +12,7 @@ from django.db.models import Q, Count
 from django.urls import reverse_lazy
 from django.conf import settings
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
-from .models import Folder, File, Map
+from .models import Folder, File, Map, Tool
 from .forms import RegistrationForm, FolderForm, FileUploadForm
 from .tasks import process_gis_file_task
 
@@ -169,21 +169,21 @@ class HomeView(TemplateView):
             Q(folder__is_public=False)  # Folder is private (so this file is top public level)
         ).order_by('-created_at')
         
-        # Get public maps
-        public_maps_queryset = Map.objects.filter(
+        # Get public maps - separate panel, no pagination mixing
+        public_maps = Map.objects.filter(
             is_public=True,
             deletion_in_progress=False
         ).order_by('-created_at')
         
-        # Combine folders, files, and maps for unified pagination (100 items per page)
+        # Pagination for folders and files only (100 items per page)
         page = self.request.GET.get('page', 1)
         items_per_page = 100
         
-        # Calculate total items
+        # Calculate total items (folders + files only, maps are separate)
         total_folders = public_folders_queryset.count()
         total_files = public_files_queryset.count()
-        total_maps = public_maps_queryset.count()
-        total_items = total_folders + total_files + total_maps
+        total_maps = public_maps.count()
+        total_items = total_folders + total_files
         
         # Set up pagination
         paginator = Paginator(range(total_items), items_per_page)
@@ -202,7 +202,6 @@ class HomeView(TemplateView):
         # Initialize empty querysets
         public_folders = Folder.objects.none()
         public_files = File.objects.none()
-        public_maps = Map.objects.none()
         
         # Determine which content types are in this page range
         if start_index < total_folders:
@@ -211,37 +210,18 @@ class HomeView(TemplateView):
                 # Page contains only folders
                 public_folders = public_folders_queryset[start_index:end_index]
             else:
-                # Page contains folders and other content
+                # Page contains folders and files
                 public_folders = public_folders_queryset[start_index:]
                 remaining_slots = end_index - total_folders
-                
-                if remaining_slots > 0 and remaining_slots <= total_files:
-                    # Remaining slots filled with files
-                    public_files = public_files_queryset[0:remaining_slots]
-                elif remaining_slots > total_files:
-                    # All files + some maps
-                    public_files = public_files_queryset[0:total_files]
-                    maps_count = remaining_slots - total_files
-                    public_maps = public_maps_queryset[0:maps_count]
-        elif start_index < total_folders + total_files:
+                public_files = public_files_queryset[0:remaining_slots]
+        else:
             # Page starts with files
             files_start = start_index - total_folders
-            if end_index <= total_folders + total_files:
-                # Page contains only files
-                public_files = public_files_queryset[files_start:files_start + items_per_page]
-            else:
-                # Page contains files and maps
-                public_files = public_files_queryset[files_start:]
-                maps_count = end_index - (total_folders + total_files)
-                public_maps = public_maps_queryset[0:maps_count]
-        else:
-            # Page starts with maps
-            maps_start = start_index - (total_folders + total_files)
-            public_maps = public_maps_queryset[maps_start:maps_start + items_per_page]
+            public_files = public_files_queryset[files_start:files_start + items_per_page]
         
         context['public_folders'] = public_folders
         context['public_files'] = public_files
-        context['public_maps'] = public_maps
+        context['public_maps'] = public_maps  # All maps, separate panel
         context['page_obj'] = page_obj
         context['total_items'] = total_items
         
@@ -259,20 +239,53 @@ def dashboard(request):
     """Main dashboard for authenticated users"""
     user = request.user
     
-    # Get user's root folders (exclude items being deleted)
-    folders_queryset = Folder.objects.filter(owner=user, parent=None, deletion_in_progress=False).order_by('name')
+    # Get user's root folders (exclude items being deleted and third-party items)
+    user_folders_queryset = Folder.objects.filter(
+        owner=user, 
+        parent=None, 
+        deletion_in_progress=False,
+        is_third_party=False  # Exclude third-party folders
+    ).order_by('name')
     
-    # Get root-level files (not files inside folders, exclude items being deleted)
-    files_queryset = File.objects.filter(owner=user, folder=None, deletion_in_progress=False).order_by('-created_at')
+    # Get public root folders from OTHER users only (not current user's folders, exclude third-party)
+    public_folders_from_others = Folder.objects.filter(
+        is_public=True, 
+        deletion_in_progress=False,
+        parent=None,  # Only top-level folders
+        is_third_party=False  # Exclude third-party folders
+    ).exclude(owner=user).order_by('name')
+    
+    # Combine user's folders with public folders from others
+    # User's folders first, then public folders from others
+    from itertools import chain
+    folders_list = list(chain(user_folders_queryset, public_folders_from_others))
+    
+    # Get root-level files (not files inside folders, exclude items being deleted and third-party)
+    user_files_queryset = File.objects.filter(
+        owner=user, 
+        folder=None, 
+        deletion_in_progress=False,
+        is_third_party=False  # Exclude third-party files
+    ).order_by('-created_at')
+    
+    # Get public root files from OTHER users only (exclude third-party)
+    public_files_from_others = File.objects.filter(
+        is_public=True, 
+        deletion_in_progress=False,
+        folder=None,  # Only files not inside any folder
+        is_third_party=False  # Exclude third-party files
+    ).exclude(owner=user).order_by('-created_at')
+    
+    # Combine user's files with public files from others
+    files_list = list(chain(user_files_queryset, public_files_from_others))
     
     # Combine folders and files for pagination
-    # We'll handle pagination by getting separate pages and combining
     page = request.GET.get('page', 1)
     items_per_page = 100
     
     # Calculate total items
-    total_folders = folders_queryset.count()
-    total_files = files_queryset.count()
+    total_folders = len(folders_list)
+    total_files = len(files_list)
     total_items = total_folders + total_files
     
     # Set up pagination
@@ -294,23 +307,47 @@ def dashboard(request):
         # Page starts with folders
         if end_index <= total_folders:
             # Page contains only folders
-            folders = folders_queryset[start_index:end_index]
-            recent_files = File.objects.none()
+            folders = folders_list[start_index:end_index]
+            recent_files = []
         else:
             # Page contains some folders and some files
-            folders = folders_queryset[start_index:]
+            folders = folders_list[start_index:]
             files_start = 0
             files_end = end_index - total_folders
-            recent_files = files_queryset[files_start:files_end]
+            recent_files = files_list[files_start:files_end]
     else:
         # Page starts with files
-        folders = Folder.objects.none()
+        folders = []
         files_start = start_index - total_folders
         files_end = files_start + items_per_page
-        recent_files = files_queryset[files_start:files_end]
+        recent_files = files_list[files_start:files_end]
     
     # Robust statistics with automatic stale deletion recovery
     stats = get_robust_user_statistics(user)
+    
+    # Get all maps: user's maps + public maps from others (combined, no duplicates)
+    user_maps = Map.objects.filter(owner=user, deletion_in_progress=False)
+    public_maps_from_others = Map.objects.filter(is_public=True, deletion_in_progress=False).exclude(owner=user)
+    all_maps = (user_maps | public_maps_from_others).distinct().order_by('-created_at')
+    
+    # Get third-party data visible to the current user:
+    # - User's own third-party folders/files
+    # - Public third-party folders/files from other users
+    third_party_folders = Folder.objects.filter(
+        is_third_party=True,
+        deletion_in_progress=False,
+        parent=None  # Only top-level third-party folders
+    ).filter(
+        Q(owner=user) | Q(is_public=True)  # User's own OR public
+    ).distinct().order_by('third_party_source', 'name')
+    
+    third_party_files = File.objects.filter(
+        is_third_party=True,
+        deletion_in_progress=False,
+        folder=None  # Only root-level third-party files
+    ).filter(
+        Q(owner=user) | Q(is_public=True)  # User's own OR public
+    ).distinct().order_by('third_party_source', '-created_at')
     
     return render(request, 'filemanager/dashboard.html', {
         'folders': folders,
@@ -319,7 +356,14 @@ def dashboard(request):
         'current_folder': None,
         'page_obj': page_obj,
         'total_items': total_items,
-        'can_edit': True  # User can always edit their own dashboard
+        'can_edit': True,  # User can always edit their own dashboard
+        # Maps panel (user's maps + public maps)
+        'all_maps': all_maps,
+        # Third-party data panel
+        'third_party_folders': third_party_folders,
+        'third_party_files': third_party_files,
+        'total_third_party_folders': third_party_folders.count(),
+        'total_third_party_files': third_party_files.count(),
     })
 
 @login_required
@@ -476,12 +520,52 @@ def file_detail(request, file_id):
             csv_data = None
             csv_headers = None
     
+    # Check if this is a Realm5 observation JSON file
+    realm5_observation_data = None
+    realm5_variables = None
+    is_realm5_observation = False
+    
+    if (file_obj.is_third_party and 
+        file_obj.third_party_source == 'realm5' and 
+        file_obj.name.endswith('.json') and
+        file_obj.file_size < 5 * 1024 * 1024):  # Max 5MB
+        try:
+            with file_obj.file.open('r') as f:
+                observation_json = json.load(f)
+                
+            # Check if it has the expected structure
+            if 'observations' in observation_json and isinstance(observation_json['observations'], list):
+                observations = observation_json['observations']
+                if observations:
+                    # Extract available variables from the first observation
+                    first_obs = observations[0]
+                    # Get all numeric variables (exclude 'timestamp')
+                    realm5_variables = [key for key in first_obs.keys() 
+                                       if key != 'timestamp' and isinstance(first_obs.get(key), (int, float))]
+                    
+                    # Prepare data for visualization
+                    realm5_observation_data = {
+                        'date': observation_json.get('date'),
+                        'device_name': observation_json.get('device_name'),
+                        'dev_eui': observation_json.get('dev_eui'),
+                        'observation_count': observation_json.get('observation_count', len(observations)),
+                        'observations': observations,
+                        'variables': realm5_variables,
+                    }
+                    is_realm5_observation = True
+        except Exception as e:
+            print(f"Error parsing Realm5 observation JSON: {e}")
+            realm5_observation_data = None
+    
     return render(request, 'filemanager/file_detail.html', {
         'file': file_obj,
         'file_content': file_content,
         'csv_data': json.dumps(csv_data) if csv_data else None,
         'csv_headers': json.dumps(csv_headers) if csv_headers else None,
         'can_edit': file_obj.owner == request.user,
+        'is_realm5_observation': is_realm5_observation,
+        'realm5_observation_data': json.dumps(realm5_observation_data) if realm5_observation_data else None,
+        'realm5_variables': json.dumps(realm5_variables) if realm5_variables else None,
     })
 
 def public_file_detail(request, file_id):
@@ -547,6 +631,43 @@ def public_file_detail(request, file_id):
             csv_data = None
             csv_headers = None
     
+    # Check if this is a Realm5 observation JSON file
+    realm5_observation_data = None
+    realm5_variables = None
+    is_realm5_observation = False
+    
+    if (file_obj.is_third_party and 
+        file_obj.third_party_source == 'realm5' and 
+        file_obj.name.endswith('.json') and
+        file_obj.file_size < 5 * 1024 * 1024):  # Max 5MB
+        try:
+            with file_obj.file.open('r') as f:
+                observation_json = json.load(f)
+                
+            # Check if it has the expected structure
+            if 'observations' in observation_json and isinstance(observation_json['observations'], list):
+                observations = observation_json['observations']
+                if observations:
+                    # Extract available variables from the first observation
+                    first_obs = observations[0]
+                    # Get all numeric variables (exclude 'timestamp')
+                    realm5_variables = [key for key in first_obs.keys() 
+                                       if key != 'timestamp' and isinstance(first_obs.get(key), (int, float))]
+                    
+                    # Prepare data for visualization
+                    realm5_observation_data = {
+                        'date': observation_json.get('date'),
+                        'device_name': observation_json.get('device_name'),
+                        'dev_eui': observation_json.get('dev_eui'),
+                        'observation_count': observation_json.get('observation_count', len(observations)),
+                        'observations': observations,
+                        'variables': realm5_variables,
+                    }
+                    is_realm5_observation = True
+        except Exception as e:
+            print(f"Error parsing Realm5 observation JSON: {e}")
+            realm5_observation_data = None
+    
     # Reuse the same template as private file detail, but with can_edit=False
     return render(request, 'filemanager/file_detail.html', {
         'file': file_obj,
@@ -556,6 +677,9 @@ def public_file_detail(request, file_id):
         'can_edit': False,  # Public users can't edit
         'is_public_view': True,  # Flag to adjust breadcrumbs and navigation
         'public_breadcrumbs': file_obj.get_public_breadcrumbs(),  # Add public breadcrumbs
+        'is_realm5_observation': is_realm5_observation,
+        'realm5_observation_data': json.dumps(realm5_observation_data) if realm5_observation_data else None,
+        'realm5_variables': json.dumps(realm5_variables) if realm5_variables else None,
     })
 
 @login_required
@@ -904,8 +1028,16 @@ def map_viewer(request, file_id):
         else:
             scheme = 'https' if request.is_secure() else 'http'
         
-        # Use /geoserver/ proxy path for external access
-        geoserver_base_url = f"{scheme}://{host}/geoserver"
+        # Check if request is coming directly to Django dev server (not through proxy)
+        # In dev, if accessing via port 8001/8000, use direct GeoServer URL
+        # In production or when going through Nginx (port 80), use the proxy path
+        if ':8001' in host or ':8000' in host:
+            # Direct access to Django dev server - use direct GeoServer URL
+            # GeoServer is accessible at localhost:8080 from the browser
+            geoserver_base_url = "http://localhost:8080/geoserver"
+        else:
+            # Access through proxy (Nginx/Apache) - use the proxy path
+            geoserver_base_url = f"{scheme}://{host}/geoserver"
         
         # Parse spatial extent if available
         spatial_extent = None
@@ -959,8 +1091,16 @@ def public_map_viewer(request, file_id):
         else:
             scheme = 'https' if request.is_secure() else 'http'
         
-        # Use /geoserver/ proxy path for external access
-        geoserver_base_url = f"{scheme}://{host}/geoserver"
+        # Check if request is coming directly to Django dev server (not through proxy)
+        # In dev, if accessing via port 8001/8000, use direct GeoServer URL
+        # In production or when going through Nginx (port 80), use the proxy path
+        if ':8001' in host or ':8000' in host:
+            # Direct access to Django dev server - use direct GeoServer URL
+            # GeoServer is accessible at localhost:8080 from the browser
+            geoserver_base_url = "http://localhost:8080/geoserver"
+        else:
+            # Access through proxy (Nginx/Apache) - use the proxy path
+            geoserver_base_url = f"{scheme}://{host}/geoserver"
         
         # Parse spatial extent if available
         spatial_extent = None
@@ -1251,6 +1391,489 @@ class DocumentationView(TemplateView):
         context['page_title'] = 'Documentation'
         return context
 
+
+class SeedingToolView(LoginRequiredMixin, TemplateView):
+    """Seeding Tool page - allows users to select input file and output folder"""
+    template_name = 'filemanager/seeding_tool.html'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        
+        # Build hierarchical tree data structure for the file browser
+        tree_data = self._build_tree_data(user)
+        
+        context['tree_data'] = json.dumps(tree_data)
+        context['page_title'] = 'Seeding Tool'
+        
+        return context
+    
+    def _build_tree_data(self, user):
+        """Build hierarchical folder/file tree for the browser UI"""
+        
+        def folder_to_dict(folder, include_files=True):
+            """Convert a folder to a dictionary with its contents"""
+            data = {
+                'id': str(folder.id),
+                'name': folder.name,
+                'file_count': folder.files.filter(deletion_in_progress=False).count(),
+                'subfolders': [],
+                'files': []
+            }
+            
+            # Get subfolders
+            subfolders = Folder.objects.filter(
+                parent=folder,
+                deletion_in_progress=False
+            ).order_by('name')
+            
+            for subfolder in subfolders:
+                data['subfolders'].append(folder_to_dict(subfolder, include_files))
+            
+            # Get files (only shapefiles for input selection)
+            if include_files:
+                files = File.objects.filter(
+                    folder=folder,
+                    deletion_in_progress=False,
+                    name__iendswith='.shp'
+                ).order_by('name')
+                
+                for file in files:
+                    data['files'].append({
+                        'id': str(file.id),
+                        'name': file.name,
+                        'size_display': file.get_size_display()
+                    })
+            
+            return data
+        
+        # Get user's root-level folders (no parent)
+        my_root_folders = Folder.objects.filter(
+            owner=user,
+            parent__isnull=True,
+            deletion_in_progress=False
+        ).order_by('name')
+        
+        # Get user's root-level files (no folder)
+        my_root_files = File.objects.filter(
+            owner=user,
+            folder__isnull=True,
+            deletion_in_progress=False,
+            name__iendswith='.shp'
+        ).order_by('name')
+        
+        # Get public root-level folders (from other users)
+        public_root_folders = Folder.objects.filter(
+            is_public=True,
+            parent__isnull=True,
+            deletion_in_progress=False
+        ).exclude(owner=user).order_by('name')
+        
+        # Get public root-level files (from other users)
+        public_root_files = File.objects.filter(
+            is_public=True,
+            folder__isnull=True,
+            deletion_in_progress=False,
+            name__iendswith='.shp'
+        ).exclude(owner=user).order_by('name')
+        
+        # Build tree structure
+        tree_data = {
+            'my_folders': [folder_to_dict(f) for f in my_root_folders],
+            'my_root_files': [{
+                'id': str(f.id),
+                'name': f.name,
+                'size_display': f.get_size_display()
+            } for f in my_root_files],
+            'public_folders': [folder_to_dict(f) for f in public_root_folders],
+            'public_root_files': [{
+                'id': str(f.id),
+                'name': f.name,
+                'size_display': f.get_size_display()
+            } for f in public_root_files]
+        }
+        
+        return tree_data
+
+
+class ToolsListView(LoginRequiredMixin, TemplateView):
+    """List view for available tools with panel/list view toggle"""
+    template_name = 'filemanager/tools_list.html'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        
+        # View mode (panel or list)
+        context['view_mode'] = self.request.GET.get('view', 'panel')
+        context['page_title'] = 'Tools'
+        
+        # Get tools from database
+        available_tools = Tool.get_available_tools_for_user(self.request.user)
+        
+        # Separate available tools from coming soon tools
+        my_tools_qs = available_tools.filter(status='available')
+        coming_soon_tools_qs = available_tools.filter(status='coming_soon')
+        
+        # Convert to list of dicts for template compatibility
+        # This maintains backward compatibility with the existing template
+        my_tools = []
+        for tool in my_tools_qs:
+            my_tools.append({
+                'id': str(tool.id),
+                'slug': tool.slug,
+                'name': tool.name,
+                'description': tool.short_description or tool.description,
+                'icon': tool.icon,
+                'color': tool.icon_color,
+                'url_name': tool.url_name,
+                'status': tool.status,
+                'category': tool.get_category_display(),
+                'version': tool.version,
+                'usage_count': tool.usage_count,
+                'is_system_tool': tool.is_system_tool,
+                'owner': tool.owner.username if tool.owner else None,
+            })
+        
+        coming_soon_tools = []
+        for tool in coming_soon_tools_qs:
+            coming_soon_tools.append({
+                'id': str(tool.id),
+                'slug': tool.slug,
+                'name': tool.name,
+                'description': tool.short_description or tool.description,
+                'icon': tool.icon,
+                'color': tool.icon_color,
+                'url_name': tool.url_name,
+                'status': tool.status,
+                'category': tool.get_category_display(),
+                'version': tool.version,
+                'is_system_tool': tool.is_system_tool,
+                'owner': tool.owner.username if tool.owner else None,
+            })
+        
+        # Fallback: If no tools in database, show hardcoded tools (for backwards compatibility during migration)
+        if not my_tools and not Tool.objects.filter(is_system_tool=True).exists():
+            my_tools = [
+                {
+                    'id': 'seeding_tool',
+                    'slug': 'seeding-tool',
+                    'name': 'Seeding Tool',
+                    'description': 'Process point shapefiles to create seeding polygons, boundaries, and summary statistics.',
+                    'icon': 'fa-seedling',
+                    'color': 'warning',
+                    'url_name': 'filemanager:seeding_tool',
+                    'status': 'available',
+                    'category': 'GIS Processing',
+                },
+                {
+                    'id': 'shape_to_json',
+                    'slug': 'shape-to-json',
+                    'name': 'Shape to JSON',
+                    'description': 'Convert shapefiles to GeoJSON format for web mapping applications.',
+                    'icon': 'fa-exchange-alt',
+                    'color': 'primary',
+                    'url_name': 'filemanager:shape_to_json_tool',
+                    'status': 'available',
+                    'category': 'Format Conversion',
+                },
+                {
+                    'id': 'si_tool',
+                    'slug': 'si-tool',
+                    'name': 'SI Tool',
+                    'description': 'Calculate Stress Index values from NDRE and buffer sector data.',
+                    'icon': 'fa-chart-line',
+                    'color': 'success',
+                    'url_name': 'filemanager:si_tool',
+                    'status': 'available',
+                    'category': 'Analysis',
+                },
+            ]
+            coming_soon_tools = [
+                {
+                    'id': 'yield_analysis',
+                    'slug': 'yield-analysis',
+                    'name': 'Yield Analysis',
+                    'description': 'Analyze yield data and generate comprehensive reports.',
+                    'icon': 'fa-chart-bar',
+                    'color': 'secondary',
+                    'url_name': None,
+                    'status': 'coming_soon',
+                    'category': 'Analysis',
+                },
+                {
+                    'id': 'layer_merge',
+                    'slug': 'layer-merge',
+                    'name': 'Layer Merge',
+                    'description': 'Merge multiple GIS layers into a single file.',
+                    'icon': 'fa-layer-group',
+                    'color': 'secondary',
+                    'url_name': None,
+                    'status': 'coming_soon',
+                    'category': 'GIS Processing',
+                },
+            ]
+        
+        context['my_tools'] = my_tools
+        context['coming_soon_tools'] = coming_soon_tools
+        context['total_available'] = len(my_tools)
+        context['total_coming_soon'] = len(coming_soon_tools)
+        
+        return context
+
+
+class ShapeToJsonToolView(LoginRequiredMixin, TemplateView):
+    """Shape to JSON Tool page - converts shapefiles to GeoJSON format"""
+    template_name = 'filemanager/shape_to_json_tool.html'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        
+        # Build hierarchical tree data structure for the file browser
+        tree_data = self._build_tree_data(user)
+        
+        context['tree_data'] = json.dumps(tree_data)
+        context['page_title'] = 'Shape to JSON Tool'
+        
+        return context
+    
+    def _build_tree_data(self, user):
+        """Build hierarchical folder/file tree for the browser UI"""
+        
+        def folder_to_dict(folder, include_files=True):
+            """Convert a folder to a dictionary with its contents"""
+            data = {
+                'id': str(folder.id),
+                'name': folder.name,
+                'file_count': folder.files.filter(deletion_in_progress=False).count(),
+                'subfolders': [],
+                'files': []
+            }
+            
+            # Get subfolders
+            subfolders = Folder.objects.filter(
+                parent=folder,
+                deletion_in_progress=False
+            ).order_by('name')
+            
+            for subfolder in subfolders:
+                data['subfolders'].append(folder_to_dict(subfolder, include_files))
+            
+            # Get files (only shapefiles for input selection)
+            if include_files:
+                files = File.objects.filter(
+                    folder=folder,
+                    deletion_in_progress=False,
+                    name__iendswith='.shp'
+                ).order_by('name')
+                
+                for file in files:
+                    data['files'].append({
+                        'id': str(file.id),
+                        'name': file.name,
+                        'size_display': file.get_size_display()
+                    })
+            
+            return data
+        
+        # Get user's root-level folders (no parent)
+        my_root_folders = Folder.objects.filter(
+            owner=user,
+            parent__isnull=True,
+            deletion_in_progress=False
+        ).order_by('name')
+        
+        # Get user's root-level files (no folder)
+        my_root_files = File.objects.filter(
+            owner=user,
+            folder__isnull=True,
+            deletion_in_progress=False,
+            name__iendswith='.shp'
+        ).order_by('name')
+        
+        # Get public root-level folders (from other users)
+        public_root_folders = Folder.objects.filter(
+            is_public=True,
+            parent__isnull=True,
+            deletion_in_progress=False
+        ).exclude(owner=user).order_by('name')
+        
+        # Get public root-level files (from other users)
+        public_root_files = File.objects.filter(
+            is_public=True,
+            folder__isnull=True,
+            deletion_in_progress=False,
+            name__iendswith='.shp'
+        ).exclude(owner=user).order_by('name')
+        
+        # Build tree structure
+        tree_data = {
+            'my_folders': [folder_to_dict(f) for f in my_root_folders],
+            'my_root_files': [{
+                'id': str(f.id),
+                'name': f.name,
+                'size_display': f.get_size_display()
+            } for f in my_root_files],
+            'public_folders': [folder_to_dict(f) for f in public_root_folders],
+            'public_root_files': [{
+                'id': str(f.id),
+                'name': f.name,
+                'size_display': f.get_size_display()
+            } for f in public_root_files]
+        }
+        
+        return tree_data
+
+
+class SIToolView(LoginRequiredMixin, TemplateView):
+    """SI (Stress Index) Tool page - calculates SI values from buffer sectors and NDRE data"""
+    template_name = 'filemanager/si_tool.html'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        
+        # Build hierarchical tree data structure for the file browsers
+        # We need separate trees for shapefiles and CSV files
+        shp_tree_data = self._build_tree_data(user, file_extensions=['.shp'])
+        csv_tree_data = self._build_tree_data(user, file_extensions=['.csv'])
+        folder_tree_data = self._build_folder_tree(user)
+        
+        context['shp_tree_data'] = json.dumps(shp_tree_data)
+        context['csv_tree_data'] = json.dumps(csv_tree_data)
+        context['folder_tree_data'] = json.dumps(folder_tree_data)
+        context['page_title'] = 'SI Tool'
+        
+        return context
+    
+    def _build_tree_data(self, user, file_extensions):
+        """Build hierarchical folder/file tree for specific file extensions"""
+        
+        def folder_to_dict(folder, include_files=True):
+            """Convert a folder to a dictionary with its contents"""
+            data = {
+                'id': str(folder.id),
+                'name': folder.name,
+                'file_count': folder.files.filter(deletion_in_progress=False).count(),
+                'subfolders': [],
+                'files': []
+            }
+            
+            # Get subfolders
+            subfolders = Folder.objects.filter(
+                parent=folder,
+                deletion_in_progress=False
+            ).order_by('name')
+            
+            for subfolder in subfolders:
+                data['subfolders'].append(folder_to_dict(subfolder, include_files))
+            
+            # Get files matching extensions
+            if include_files:
+                from django.db.models import Q
+                q_filter = Q()
+                for ext in file_extensions:
+                    q_filter |= Q(name__iendswith=ext)
+                
+                files = File.objects.filter(
+                    q_filter,
+                    folder=folder,
+                    deletion_in_progress=False
+                ).order_by('name')
+                
+                for file in files:
+                    data['files'].append({
+                        'id': str(file.id),
+                        'name': file.name,
+                        'size_display': file.get_size_display()
+                    })
+            
+            return data
+        
+        # Get user's root-level folders
+        my_root_folders = Folder.objects.filter(
+            owner=user,
+            parent__isnull=True,
+            deletion_in_progress=False
+        ).order_by('name')
+        
+        # Get user's root-level files matching extensions
+        from django.db.models import Q
+        q_filter = Q()
+        for ext in file_extensions:
+            q_filter |= Q(name__iendswith=ext)
+        
+        my_root_files = File.objects.filter(
+            q_filter,
+            owner=user,
+            folder__isnull=True,
+            deletion_in_progress=False
+        ).order_by('name')
+        
+        # Get public root-level folders
+        public_root_folders = Folder.objects.filter(
+            is_public=True,
+            parent__isnull=True,
+            deletion_in_progress=False
+        ).exclude(owner=user).order_by('name')
+        
+        # Get public root-level files matching extensions
+        public_root_files = File.objects.filter(
+            q_filter,
+            is_public=True,
+            folder__isnull=True,
+            deletion_in_progress=False
+        ).exclude(owner=user).order_by('name')
+        
+        # Build tree structure
+        tree_data = {
+            'my_folders': [folder_to_dict(f) for f in my_root_folders],
+            'my_root_files': [{
+                'id': str(f.id),
+                'name': f.name,
+                'size_display': f.get_size_display()
+            } for f in my_root_files],
+            'public_folders': [folder_to_dict(f) for f in public_root_folders],
+            'public_root_files': [{
+                'id': str(f.id),
+                'name': f.name,
+                'size_display': f.get_size_display()
+            } for f in public_root_files]
+        }
+        
+        return tree_data
+    
+    def _build_folder_tree(self, user):
+        """Build folder-only tree for output folder selection"""
+        
+        def folder_to_dict(folder):
+            data = {
+                'id': str(folder.id),
+                'name': folder.name,
+                'subfolders': []
+            }
+            
+            subfolders = Folder.objects.filter(
+                parent=folder,
+                deletion_in_progress=False
+            ).order_by('name')
+            
+            for subfolder in subfolders:
+                data['subfolders'].append(folder_to_dict(subfolder))
+            
+            return data
+        
+        my_root_folders = Folder.objects.filter(
+            owner=user,
+            parent__isnull=True,
+            deletion_in_progress=False
+        ).order_by('name')
+        
+        return {
+            'my_folders': [folder_to_dict(f) for f in my_root_folders]
+        }
+
+
 class SearchView(TemplateView):
     """PostgreSQL-based search page with text matching and metadata filtering"""
     template_name = 'filemanager/search.html'
@@ -1420,7 +2043,8 @@ def run_seeding_tool(request):
     
     POST request with JSON body:
     {
-        "file_id": "uuid-of-file"
+        "file_id": "uuid-of-file",
+        "output_folder_id": "uuid-of-folder" (optional)
     }
     
     Returns:
@@ -1436,6 +2060,7 @@ def run_seeding_tool(request):
     try:
         data = json.loads(request.body)
         file_id = data.get('file_id')
+        output_folder_id = data.get('output_folder_id')  # Optional
         
         if not file_id:
             return JsonResponse({'success': False, 'error': 'file_id is required'}, status=400)
@@ -1450,6 +2075,13 @@ def run_seeding_tool(request):
         if file_obj.owner != request.user and not file_obj.is_public:
             return JsonResponse({'success': False, 'error': 'Permission denied'}, status=403)
         
+        # Validate output folder if provided
+        if output_folder_id:
+            try:
+                output_folder = Folder.objects.get(id=output_folder_id, owner=request.user)
+            except Folder.DoesNotExist:
+                return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
+        
         # Validate file type
         file_ext = os.path.splitext(file_obj.name)[1].lower()
         if file_ext not in ['.shp', '.gpkg']:
@@ -1458,9 +2090,9 @@ def run_seeding_tool(request):
                 'error': f'Seeding Tool only supports .shp and .gpkg files. Got: {file_ext}'
             }, status=400)
         
-        # Trigger the Celery task
+        # Trigger the Celery task with optional output_folder_id
         from .tasks import run_seeding_tool_task
-        task = run_seeding_tool_task.delay(str(file_id))
+        task = run_seeding_tool_task.delay(str(file_id), output_folder_id)
         
         return JsonResponse({
             'success': True,
@@ -1511,6 +2143,289 @@ def check_seeding_tool_status(request, task_id):
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Error checking Seeding Tool status: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+def run_shape_to_json(request):
+    """
+    API endpoint to trigger the Shape to JSON Tool on a .shp file.
+    
+    POST request with JSON body:
+    {
+        "file_id": "uuid-of-file",
+        "output_folder_id": "uuid-of-folder" (optional)
+    }
+    
+    Returns:
+    {
+        "success": true/false,
+        "message": "...",
+        "task_id": "celery-task-id" (if async)
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        file_id = data.get('file_id')
+        output_folder_id = data.get('output_folder_id')  # Optional
+        
+        if not file_id:
+            return JsonResponse({'success': False, 'error': 'file_id is required'}, status=400)
+        
+        # Get the file object
+        try:
+            file_obj = File.objects.get(id=file_id)
+        except File.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'File not found'}, status=404)
+        
+        # Check permissions - user must be owner OR file must be public
+        if file_obj.owner != request.user and not file_obj.is_public:
+            return JsonResponse({'success': False, 'error': 'Permission denied'}, status=403)
+        
+        # Validate output folder if provided
+        if output_folder_id:
+            try:
+                output_folder = Folder.objects.get(id=output_folder_id, owner=request.user)
+            except Folder.DoesNotExist:
+                return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
+        
+        # Validate file type
+        file_ext = os.path.splitext(file_obj.name)[1].lower()
+        if file_ext != '.shp':
+            return JsonResponse({
+                'success': False, 
+                'error': f'Shape to JSON only supports .shp files. Got: {file_ext}'
+            }, status=400)
+        
+        # Trigger the Celery task with optional output_folder_id
+        from .tasks import run_shape_to_json_task
+        task = run_shape_to_json_task.delay(str(file_id), output_folder_id)
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'Shape to JSON started for {file_obj.name}',
+            'task_id': task.id
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error running Shape to JSON: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+def check_shape_to_json_status(request, task_id):
+    """
+    Check the status of a Shape to JSON task.
+    
+    GET request returns:
+    {
+        "success": true,
+        "status": "PENDING" | "STARTED" | "SUCCESS" | "FAILURE",
+        "result": {...} (if completed)
+    }
+    """
+    try:
+        from celery.result import AsyncResult
+        
+        result = AsyncResult(task_id)
+        
+        response = {
+            'success': True,
+            'status': result.status,
+        }
+        
+        if result.ready():
+            if result.successful():
+                response['result'] = result.result
+            else:
+                response['error'] = str(result.result)
+        
+        return JsonResponse(response)
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error checking Shape to JSON status: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+def run_si_tool(request):
+    """
+    API endpoint to trigger the SI (Stress Index) Tool.
+    
+    POST request with JSON body:
+    {
+        "treatment": "STANDARD" or "SBF",
+        "imagery": "UAV" or "SATELLITE",
+        "si_column_name": "SI_08_01",
+        "field_column": "Plot_Numbe",
+        "buffer_sectors_file_id": "uuid-of-file",
+        "ndre_file_id": "uuid-of-file" (optional, required for UAV),
+        "csv_file_id": "uuid-of-file",
+        "indicator_block_file_id": "uuid-of-file" (optional, required for SBF),
+        "output_folder_id": "uuid-of-folder" (optional)
+    }
+    
+    Returns:
+    {
+        "success": true/false,
+        "message": "...",
+        "task_id": "celery-task-id" (if async)
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        
+        # Required fields
+        treatment = data.get('treatment', '').upper()
+        imagery = data.get('imagery', '').upper()
+        si_column_name = data.get('si_column_name', '').strip()
+        field_column = data.get('field_column', '').strip()
+        buffer_sectors_file_id = data.get('buffer_sectors_file_id')
+        
+        # Optional fields
+        ndre_file_id = data.get('ndre_file_id')
+        csv_file_id = data.get('csv_file_id')
+        indicator_block_file_id = data.get('indicator_block_file_id')
+        output_folder_id = data.get('output_folder_id')
+        
+        # Validate required fields
+        if treatment not in ['STANDARD', 'SBF']:
+            return JsonResponse({'success': False, 'error': 'Treatment must be STANDARD or SBF'}, status=400)
+        
+        if imagery not in ['UAV', 'SATELLITE']:
+            return JsonResponse({'success': False, 'error': 'Imagery must be UAV or SATELLITE'}, status=400)
+        
+        if not si_column_name:
+            return JsonResponse({'success': False, 'error': 'SI column name is required'}, status=400)
+        
+        if not field_column:
+            return JsonResponse({'success': False, 'error': 'Field column name is required'}, status=400)
+        
+        if not buffer_sectors_file_id:
+            return JsonResponse({'success': False, 'error': 'Buffer sectors file is required'}, status=400)
+        
+        # Validate buffer sectors file
+        try:
+            buffer_file = File.objects.get(id=buffer_sectors_file_id)
+            if buffer_file.owner != request.user and not buffer_file.is_public:
+                return JsonResponse({'success': False, 'error': 'Permission denied for buffer sectors file'}, status=403)
+        except File.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Buffer sectors file not found'}, status=404)
+        
+        # Validate NDRE file for UAV
+        if imagery == 'UAV':
+            if not ndre_file_id:
+                return JsonResponse({'success': False, 'error': 'NDRE file is required for UAV imagery'}, status=400)
+            try:
+                ndre_file = File.objects.get(id=ndre_file_id)
+                if ndre_file.owner != request.user and not ndre_file.is_public:
+                    return JsonResponse({'success': False, 'error': 'Permission denied for NDRE file'}, status=403)
+            except File.DoesNotExist:
+                return JsonResponse({'success': False, 'error': 'NDRE file not found'}, status=404)
+        
+        # Validate CSV file
+        if not csv_file_id:
+            return JsonResponse({'success': False, 'error': 'CSV file is required'}, status=400)
+        try:
+            csv_file = File.objects.get(id=csv_file_id)
+            if csv_file.owner != request.user and not csv_file.is_public:
+                return JsonResponse({'success': False, 'error': 'Permission denied for CSV file'}, status=403)
+        except File.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'CSV file not found'}, status=404)
+        
+        # Validate indicator block file for SBF
+        if treatment == 'SBF':
+            if not indicator_block_file_id:
+                return JsonResponse({'success': False, 'error': 'Indicator block file is required for SBF treatment'}, status=400)
+            try:
+                indicator_file = File.objects.get(id=indicator_block_file_id)
+                if indicator_file.owner != request.user and not indicator_file.is_public:
+                    return JsonResponse({'success': False, 'error': 'Permission denied for indicator block file'}, status=403)
+            except File.DoesNotExist:
+                return JsonResponse({'success': False, 'error': 'Indicator block file not found'}, status=404)
+        
+        # Validate output folder if provided
+        if output_folder_id:
+            try:
+                output_folder = Folder.objects.get(id=output_folder_id, owner=request.user)
+            except Folder.DoesNotExist:
+                return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
+        
+        # Trigger the Celery task
+        from .tasks import run_si_tool_task
+        task = run_si_tool_task.delay(
+            treatment=treatment,
+            imagery=imagery,
+            si_column_name=si_column_name,
+            field_column=field_column,
+            buffer_sectors_file_id=str(buffer_sectors_file_id),
+            ndre_file_id=str(ndre_file_id) if ndre_file_id else None,
+            csv_file_id=str(csv_file_id) if csv_file_id else None,
+            indicator_block_file_id=str(indicator_block_file_id) if indicator_block_file_id else None,
+            output_dir_id=output_folder_id
+        )
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'SI Tool ({treatment} + {imagery}) started',
+            'task_id': task.id
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error running SI Tool: {e}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+def check_si_tool_status(request, task_id):
+    """
+    Check the status of an SI Tool task.
+    
+    GET request returns:
+    {
+        "success": true,
+        "status": "PENDING" | "STARTED" | "SUCCESS" | "FAILURE",
+        "result": {...} (if completed)
+    }
+    """
+    try:
+        from celery.result import AsyncResult
+        
+        result = AsyncResult(task_id)
+        
+        response = {
+            'success': True,
+            'status': result.status,
+        }
+        
+        if result.ready():
+            if result.successful():
+                response['result'] = result.result
+            else:
+                response['error'] = str(result.result)
+        
+        return JsonResponse(response)
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error checking SI Tool status: {e}")
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 

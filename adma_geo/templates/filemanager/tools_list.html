@@ -1,0 +1,253 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Tools - ADMA GEO{% endblock %}
+
+{% block extra_css %}
+<style>
+    .tool-card {
+        transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        height: 100%;
+        cursor: pointer;
+        text-decoration: none;
+    }
+    
+    .tool-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+    
+    .tool-thumbnail {
+        height: 120px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 3rem;
+    }
+    
+    .tool-thumbnail.bg-warning {
+        background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%) !important;
+    }
+    
+    .tool-thumbnail.bg-primary {
+        background: linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%) !important;
+    }
+    
+    .tool-thumbnail.bg-success {
+        background: linear-gradient(135deg, #198754 0%, #157347 100%) !important;
+    }
+    
+    .tool-thumbnail.bg-secondary {
+        background: linear-gradient(135deg, #6c757d 0%, #5c636a 100%) !important;
+    }
+    
+    .tool-thumbnail.bg-info {
+        background: linear-gradient(135deg, #0dcaf0 0%, #0aa2c0 100%) !important;
+    }
+    
+    .tool-meta {
+        font-size: 0.85rem;
+        color: #6c757d;
+    }
+    
+    .category-badge {
+        font-size: 0.7rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 12px;
+    }
+    
+    .view-toggle {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 0.25rem;
+    }
+    
+    .view-toggle .btn {
+        border: none;
+        background: none;
+        color: #6c757d;
+        padding: 0.5rem 0.75rem;
+        border-radius: 6px;
+    }
+    
+    .view-toggle .btn.active {
+        background-color: white;
+        color: #d00000;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .list-item {
+        border-left: 4px solid transparent;
+        transition: border-color 0.2s ease;
+    }
+    
+    .list-item:hover {
+        border-left-color: #d00000;
+        background-color: #f8f9fa;
+    }
+    
+    .tool-card-disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+    
+    .tool-card-disabled:hover {
+        transform: none;
+        box-shadow: 0 2px 15px rgba(0, 0, 0, 0.08);
+    }
+    
+    .coming-soon-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 12px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h2><i class="fas fa-tools text-danger me-2"></i>Tools</h2>
+                    <p class="text-muted mb-0">Process and analyze your spatial data with specialized tools</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <!-- View Toggle -->
+                    <div class="view-toggle d-flex">
+                        <button class="btn {% if view_mode == 'panel' %}active{% endif %}" 
+                                onclick="changeView('panel')">
+                            <i class="fas fa-th"></i>
+                        </button>
+                        <button class="btn {% if view_mode == 'list' %}active{% endif %}" 
+                                onclick="changeView('list')">
+                            <i class="fas fa-list"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Available Tools Section -->
+            {% if my_tools %}
+            <div class="mb-5">
+                <h4 class="mb-3">
+                    <i class="fas fa-check-circle text-success me-2"></i>Available Tools 
+                    <span class="badge bg-success">{{ total_available }}</span>
+                </h4>
+                
+                {% if view_mode == 'panel' %}
+                <div class="row">
+                    {% for tool in my_tools %}
+                    <div class="col-xl-3 col-lg-4 col-md-6 mb-4">
+                        <a href="{% url tool.url_name %}" class="text-decoration-none">
+                            <div class="card tool-card">
+                                <div class="tool-thumbnail bg-{{ tool.color }}">
+                                    <i class="fas {{ tool.icon }}"></i>
+                                </div>
+                                <div class="card-body">
+                                    <h6 class="card-title mb-2 text-dark">{{ tool.name }}</h6>
+                                    <p class="card-text text-muted small mb-0">{{ tool.description }}</p>
+                                </div>
+                            </div>
+                        </a>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <!-- List View -->
+                <div class="list-group">
+                    {% for tool in my_tools %}
+                    <a href="{% url tool.url_name %}" class="list-group-item list-group-item-action list-item">
+                        <div class="d-flex align-items-center">
+                            <div class="tool-thumbnail bg-{{ tool.color }} me-3" style="width: 60px; height: 60px; border-radius: 8px; font-size: 1.5rem;">
+                                <i class="fas {{ tool.icon }}"></i>
+                            </div>
+                            <div>
+                                <h6 class="mb-1">{{ tool.name }}</h6>
+                                <p class="mb-0 text-muted small">{{ tool.description }}</p>
+                            </div>
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Coming Soon Tools Section -->
+            {% if coming_soon_tools %}
+            <div class="mb-4">
+                <h4 class="mb-3">
+                    <i class="fas fa-clock text-secondary me-2"></i>Coming Soon 
+                    <span class="badge bg-secondary">{{ total_coming_soon }}</span>
+                </h4>
+                
+                {% if view_mode == 'panel' %}
+                <div class="row">
+                    {% for tool in coming_soon_tools %}
+                    <div class="col-xl-3 col-lg-4 col-md-6 mb-4">
+                        <div class="card tool-card tool-card-disabled position-relative">
+                            <div class="tool-thumbnail bg-{{ tool.color }}">
+                                <i class="fas {{ tool.icon }}"></i>
+                            </div>
+                            <div class="card-body">
+                                <h6 class="card-title mb-2 text-muted">{{ tool.name }}</h6>
+                                <p class="card-text text-muted small mb-0">{{ tool.description }}</p>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <!-- List View -->
+                <div class="list-group">
+                    {% for tool in coming_soon_tools %}
+                    <div class="list-group-item list-item" style="opacity: 0.6;">
+                        <div class="d-flex align-items-center">
+                            <div class="tool-thumbnail bg-{{ tool.color }} me-3" style="width: 60px; height: 60px; border-radius: 8px; font-size: 1.5rem;">
+                                <i class="fas {{ tool.icon }}"></i>
+                            </div>
+                            <div>
+                                <h6 class="mb-1 text-muted">{{ tool.name }}</h6>
+                                <p class="mb-0 text-muted small">{{ tool.description }}</p>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Empty State -->
+            {% if not my_tools and not coming_soon_tools %}
+            <div class="text-center py-5">
+                <i class="fas fa-tools fa-4x text-muted mb-3"></i>
+                <h4 class="text-muted">No tools available</h4>
+                <p class="text-muted">Check back later for new tools.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function changeView(mode) {
+    const url = new URL(window.location);
+    url.searchParams.set('view', mode);
+    window.location.href = url.toString();
+}
+</script>
+{% endblock %}

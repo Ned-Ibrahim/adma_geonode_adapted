@@ -105,7 +105,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'America/Chicago'  # Central Time (Nebraska)
 USE_I18N = True
 USE_TZ = True
 
@@ -139,6 +139,20 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+
+# Celery Beat Schedule (for periodic tasks)
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'sync-realm5-daily': {
+        'task': 'filemanager.tasks.sync_realm5_task',
+        'schedule': crontab(hour=2, minute=0),  # Run at 2:00 AM daily
+    },
+}
+
+# Realm5 API Configuration
+# API key should be set via environment variable (loaded from .env file)
+REALM5_API_KEY = os.environ.get('REALM5_API_KEY')
 
 # File Upload Settings
 FILE_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024  # 500MB

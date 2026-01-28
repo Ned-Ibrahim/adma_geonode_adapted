@@ -115,6 +115,53 @@
                 </div>
                 {% endif %}
 
+                <!-- Realm5 Observation Visualization Panel -->
+                {% if is_realm5_observation %}
+                <div class="mb-4">
+                    <div class="bg-light p-3 rounded">
+                        <h6><i class="fas fa-cloud me-2"></i>Realm5 Weather Station Observations</h6>
+                        
+                        <!-- Variable Selection -->
+                        <div class="row mb-3">
+                            <div class="col-md-8">
+                                <label class="form-label">Select Variables to Visualize:</label>
+                                <div id="realm5VariableCheckboxes" class="d-flex flex-wrap gap-2">
+                                    <!-- Checkboxes will be populated by JavaScript -->
+                                </div>
+                            </div>
+                            <div class="col-md-4 d-flex align-items-end">
+                                <button id="generateRealm5Chart" class="btn btn-primary">
+                                    <i class="fas fa-chart-line me-2"></i>Generate Chart
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Chart Container -->
+                        <div id="realm5ChartContainer" class="border rounded p-3 bg-white" style="min-height: 350px;">
+                            <canvas id="realm5Chart" width="800" height="350"></canvas>
+                            <div id="realm5ChartPlaceholder" class="text-center text-muted py-5">
+                                <i class="fas fa-chart-line fa-3x mb-3"></i>
+                                <p>Select one or more variables above and click "Generate Chart" to visualize weather data</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Observation Summary -->
+                        <div class="row mt-3">
+                            <div class="col-md-6">
+                                <small class="text-muted">
+                                    <i class="fas fa-calendar me-1"></i>Date: <span id="realm5Date"></span>
+                                </small>
+                            </div>
+                            <div class="col-md-6 text-md-end">
+                                <small class="text-muted">
+                                    <i class="fas fa-database me-1"></i>Observations: <span id="realm5Count"></span>
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
                 <!-- File Information -->
                 <div class="row">
                     <div class="col-md-6">
@@ -994,6 +1041,231 @@ document.addEventListener('DOMContentLoaded', function() {
     populateCSVTable();
     initializeChart();
 });
+{% endif %}
+
+// Realm5 Observation Visualization
+{% if is_realm5_observation %}
+// Include Chart.js and date-fns adapter from CDN if not already loaded
+function loadRealm5ChartDependencies(callback) {
+    if (window.Chart && window.Chart._adapters && window.Chart._adapters._date) {
+        callback();
+        return;
+    }
+    
+    // Load Chart.js first
+    if (!window.Chart) {
+        const chartScript = document.createElement('script');
+        chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+        chartScript.onload = function() {
+            // Then load date adapter
+            const adapterScript = document.createElement('script');
+            adapterScript.src = 'https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js';
+            adapterScript.onload = callback;
+            document.head.appendChild(adapterScript);
+        };
+        document.head.appendChild(chartScript);
+    } else {
+        // Chart.js loaded, check for adapter
+        const adapterScript = document.createElement('script');
+        adapterScript.src = 'https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js';
+        adapterScript.onload = callback;
+        document.head.appendChild(adapterScript);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadRealm5ChartDependencies(initializeRealm5Chart);
+});
+
+// Realm5 observation data
+const realm5Data = {{ realm5_observation_data|safe }};
+const realm5Variables = {{ realm5_variables|safe }};
+
+// Color palette for multiple variables
+const chartColors = [
+    { border: '#d00000', background: 'rgba(208, 0, 0, 0.1)' },
+    { border: '#0077b6', background: 'rgba(0, 119, 182, 0.1)' },
+    { border: '#00a651', background: 'rgba(0, 166, 81, 0.1)' },
+    { border: '#ff6b00', background: 'rgba(255, 107, 0, 0.1)' },
+    { border: '#8338ec', background: 'rgba(131, 56, 236, 0.1)' },
+    { border: '#ff006e', background: 'rgba(255, 0, 110, 0.1)' },
+    { border: '#3a86ff', background: 'rgba(58, 134, 255, 0.1)' },
+    { border: '#fb5607', background: 'rgba(251, 86, 7, 0.1)' },
+];
+
+function initializeRealm5Chart() {
+    if (!realm5Data || !realm5Variables) return;
+    
+    // Populate variable checkboxes
+    const checkboxContainer = document.getElementById('realm5VariableCheckboxes');
+    checkboxContainer.innerHTML = '';
+    
+    realm5Variables.forEach((variable, index) => {
+        const div = document.createElement('div');
+        div.className = 'form-check form-check-inline';
+        
+        const checkbox = document.createElement('input');
+        checkbox.className = 'form-check-input';
+        checkbox.type = 'checkbox';
+        checkbox.id = `var_${variable}`;
+        checkbox.value = variable;
+        // Pre-select first variable
+        if (index === 0) checkbox.checked = true;
+        
+        const label = document.createElement('label');
+        label.className = 'form-check-label';
+        label.htmlFor = `var_${variable}`;
+        label.textContent = formatVariableName(variable);
+        
+        div.appendChild(checkbox);
+        div.appendChild(label);
+        checkboxContainer.appendChild(div);
+    });
+    
+    // Update summary info
+    document.getElementById('realm5Date').textContent = realm5Data.date || 'N/A';
+    document.getElementById('realm5Count').textContent = realm5Data.observation_count || realm5Data.observations.length;
+    
+    // Add event listener for chart generation
+    document.getElementById('generateRealm5Chart').addEventListener('click', generateRealm5Chart);
+    
+    // Hide chart initially
+    document.getElementById('realm5Chart').style.display = 'none';
+}
+
+function formatVariableName(varName) {
+    // Convert snake_case to Title Case
+    return varName.split('_').map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+}
+
+function parseRealm5Timestamp(timestamp) {
+    // Parse timestamp like "2026-01-28T00:30:00.000+0000"
+    try {
+        // Replace +0000 with Z for proper ISO parsing
+        const isoString = timestamp.replace(/\+0000$/, 'Z').replace(/\.000Z$/, 'Z');
+        return new Date(isoString);
+    } catch (e) {
+        console.error('Failed to parse timestamp:', timestamp, e);
+        return null;
+    }
+}
+
+function generateRealm5Chart() {
+    // Get selected variables
+    const selectedVars = [];
+    realm5Variables.forEach(variable => {
+        const checkbox = document.getElementById(`var_${variable}`);
+        if (checkbox && checkbox.checked) {
+            selectedVars.push(variable);
+        }
+    });
+    
+    if (selectedVars.length === 0) {
+        alert('Please select at least one variable to visualize');
+        return;
+    }
+    
+    // Prepare datasets
+    const datasets = selectedVars.map((variable, index) => {
+        const color = chartColors[index % chartColors.length];
+        
+        const data = realm5Data.observations.map(obs => {
+            const timestamp = parseRealm5Timestamp(obs.timestamp);
+            return {
+                x: timestamp,
+                y: obs[variable]
+            };
+        }).filter(point => point.x !== null && !isNaN(point.y));
+        
+        // Sort by time
+        data.sort((a, b) => a.x - b.x);
+        
+        return {
+            label: formatVariableName(variable),
+            data: data,
+            borderColor: color.border,
+            backgroundColor: color.background,
+            borderWidth: 2,
+            fill: false,
+            tension: 0.2,
+            pointRadius: 2,
+            pointHoverRadius: 5
+        };
+    });
+    
+    // Hide placeholder and show chart
+    document.getElementById('realm5ChartPlaceholder').style.display = 'none';
+    const canvas = document.getElementById('realm5Chart');
+    canvas.style.display = 'block';
+    
+    // Destroy existing chart if it exists
+    if (window.realm5ChartInstance) {
+        window.realm5ChartInstance.destroy();
+    }
+    
+    // Create new chart
+    const ctx = canvas.getContext('2d');
+    window.realm5ChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        displayFormats: {
+                            hour: 'HH:mm',
+                            minute: 'HH:mm'
+                        },
+                        tooltipFormat: 'MMM d, yyyy HH:mm'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Time'
+                    }
+                },
+                y: {
+                    title: {
+                        display: true,
+                        text: selectedVars.length === 1 ? formatVariableName(selectedVars[0]) : 'Value'
+                    }
+                }
+            },
+            plugins: {
+                title: {
+                    display: true,
+                    text: `Weather Station Data - ${realm5Data.date}`
+                },
+                legend: {
+                    display: selectedVars.length > 1,
+                    position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        title: function(context) {
+                            const date = new Date(context[0].raw.x);
+                            return date.toLocaleTimeString('en-US', { 
+                                hour: '2-digit', 
+                                minute: '2-digit',
+                                hour12: false 
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
 {% endif %}
 
 // Function to refresh dashboard statistics

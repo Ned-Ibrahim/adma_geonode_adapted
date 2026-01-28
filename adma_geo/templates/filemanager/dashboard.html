@@ -73,6 +73,17 @@
 .folder-tree .badge {
     font-size: 0.7rem;
 }
+
+/* Tool panel cards - clickable */
+.tool-panel-card {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tool-panel-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
 </style>
 {% endblock %}
 
@@ -134,7 +145,7 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="fas fa-list me-2"></i>Your Files & Folders</h5>
+                <h5 class="mb-0"><i class="fas fa-database me-2"></i>Data</h5>
                 <div class="btn-group" role="group" aria-label="View toggle">
                     <button type="button" class="btn btn-sm btn-outline-secondary active" id="listViewBtn" onclick="toggleView('list')">
                         <i class="fas fa-list"></i> List
@@ -155,15 +166,15 @@
                                 <th>Name</th>
                                 <th>Type</th>
                                 <th>Size</th>
+                                <th>Owner</th>
                                 <th>Modified</th>
-                                <th>Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             <!-- Folders First -->
                             {% for folder in folders %}
-                            <tr data-folder-id="{{ folder.id }}" style="cursor: pointer;" onclick="window.location.href='{% url 'filemanager:folder_detail' folder.id %}'">
+                            <tr data-folder-id="{{ folder.id }}" style="cursor: pointer;" onclick="window.location.href='{% if folder.owner == user %}{% url 'filemanager:folder_detail' folder.id %}{% else %}{% url 'filemanager:public_folder_detail' folder.id %}{% endif %}'">
                                 <td>
                                     <div class="d-flex align-items-center">
                                         <i class="fas fa-folder folder-icon me-3"></i>
@@ -177,17 +188,28 @@
                                 </td>
                                 <td><span class="text-muted">Folder</span></td>
                                 <td><span class="text-muted">{{ folder.file_count }} files</span></td>
+                                <td>
+                                    <small>{{ folder.owner.username }}</small>
+                                    {% if folder.owner == user %}
+                                    <span class="badge bg-primary ms-1">You</span>
+                                    {% endif %}
+                                </td>
                                 <td>{{ folder.updated_at|date:"M d, Y H:i" }}</td>
-                                <td><span class="badge bg-secondary">Folder</span></td>
                                 <td>
                                     <div class="dropdown" onclick="event.stopPropagation()">
                                         <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown">
                                             <i class="fas fa-ellipsis-v"></i>
                                         </button>
                                         <ul class="dropdown-menu">
+                                            {% if folder.owner == user %}
                                             <li><a class="dropdown-item" href="#" onclick="deleteItem('folder', '{{ folder.id }}', '{{ folder.name }}')">
                                                 <i class="fas fa-trash me-2"></i>Delete
                                             </a></li>
+                                            {% else %}
+                                            <li><a class="dropdown-item" href="{% url 'filemanager:public_folder_detail' folder.id %}">
+                                                <i class="fas fa-eye me-2"></i>View
+                                            </a></li>
+                                            {% endif %}
                                         </ul>
                                     </div>
                                 </td>
@@ -196,7 +218,7 @@
 
                             <!-- Files -->
                             {% for file in recent_files %}
-                            <tr data-file-id="{{ file.id }}" style="cursor: pointer;" onclick="window.location.href='{% url 'filemanager:file_detail' file.id %}'">
+                            <tr data-file-id="{{ file.id }}" style="cursor: pointer;" onclick="window.location.href='{% if file.owner == user %}{% url 'filemanager:file_detail' file.id %}{% else %}{% url 'filemanager:public_file_detail' file.id %}{% endif %}'">
                                 <td>
                                     <div class="d-flex align-items-center">
                                         <i class="{{ file.get_icon_class }} me-3"></i>
@@ -210,14 +232,13 @@
                                 </td>
                                 <td><span class="badge bg-secondary">{{ file.file_type|title }}</span></td>
                                 <td>{{ file.get_size_display }}</td>
-                                <td>{{ file.updated_at|date:"M d, Y H:i" }}</td>
                                 <td>
-                                    {% if file.can_preview %}
-                                        <span class="badge bg-success">Previewable</span>
-                                    {% else %}
-                                        <span class="badge bg-light text-dark">File</span>
+                                    <small>{{ file.owner.username }}</small>
+                                    {% if file.owner == user %}
+                                    <span class="badge bg-primary ms-1">You</span>
                                     {% endif %}
                                 </td>
+                                <td>{{ file.updated_at|date:"M d, Y H:i" }}</td>
                                 <td>
                                     <div class="dropdown" onclick="event.stopPropagation()">
                                         <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown">
@@ -228,13 +249,15 @@
                                                <i class="fas fa-download me-2"></i>Download
                                            </a></li>
                                            {% if file.is_spatial %}
-                                           <li><a class="dropdown-item" href="{% url 'filemanager:map_viewer' file.id %}">
+                                           <li><a class="dropdown-item" href="{% if file.owner == user %}{% url 'filemanager:map_viewer' file.id %}{% else %}{% url 'filemanager:public_map_viewer' file.id %}{% endif %}">
                                                <i class="fas fa-map-marked-alt me-2"></i>View on Map
                                            </a></li>
                                            {% endif %}
+                                           {% if file.owner == user %}
                                            <li><a class="dropdown-item" href="#" onclick="deleteItem('file', '{{ file.id }}', '{{ file.name }}')">
                                                <i class="fas fa-trash me-2"></i>Delete
                                            </a></li>
+                                           {% endif %}
                                         </ul>
                                     </div>
                                 </td>
@@ -254,7 +277,7 @@
                         <div class="row">
                             {% for folder in folders %}
                             <div class="col-md-4 col-sm-6 mb-3">
-                                <div class="folder-item" data-folder-id="{{ folder.id }}" onclick="window.location.href='{% url 'filemanager:folder_detail' folder.id %}'">
+                                <div class="folder-item" data-folder-id="{{ folder.id }}" onclick="window.location.href='{% if folder.owner == user %}{% url 'filemanager:folder_detail' folder.id %}{% else %}{% url 'filemanager:public_folder_detail' folder.id %}{% endif %}'">
                                     <div class="d-flex align-items-center">
                                         <i class="fas fa-folder folder-icon"></i>
                                         <div class="flex-grow-1">
@@ -264,12 +287,16 @@
                                             </small>
                                             <br>
                                             <small class="text-muted">
-                                                {% if folder.is_public %}
-                                                    <span class="badge bg-info">Public</span> •
+                                                <i class="fas fa-user me-1"></i>{{ folder.owner.username }}
+                                                {% if folder.owner == user %}
+                                                <span class="badge bg-primary ms-1">You</span>
                                                 {% endif %}
-                                                {{ folder.created_at|date:"M d, Y" }}
+                                                {% if folder.is_public %}
+                                                • <span class="badge bg-info">Public</span>
+                                                {% endif %}
                                             </small>
                                         </div>
+                                        {% if folder.owner == user %}
                                         <div class="dropdown">
                                             <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" onclick="event.stopPropagation()">
                                                 <i class="fas fa-ellipsis-v"></i>
@@ -280,6 +307,7 @@
                                                 </a></li>
                                             </ul>
                                         </div>
+                                        {% endif %}
                                     </div>
                                 </div>
                             </div>
@@ -295,7 +323,7 @@
                         <div class="row">
                             {% for file in recent_files %}
                             <div class="col-md-4 col-sm-6 mb-3">
-                                <div class="file-item" data-file-id="{{ file.id }}" onclick="window.location.href='{% url 'filemanager:file_detail' file.id %}'">
+                                <div class="file-item" data-file-id="{{ file.id }}" onclick="window.location.href='{% if file.owner == user %}{% url 'filemanager:file_detail' file.id %}{% else %}{% url 'filemanager:public_file_detail' file.id %}{% endif %}'">
                                     <div class="d-flex align-items-center">
                                         <i class="{{ file.get_icon_class }} file-icon"></i>
                                         <div class="flex-grow-1">
@@ -305,12 +333,16 @@
                                             </small>
                                             <br>
                                             <small class="text-muted">
-                                                {% if file.is_public %}
-                                                    <span class="badge bg-info">Public</span> •
+                                                <i class="fas fa-user me-1"></i>{{ file.owner.username }}
+                                                {% if file.owner == user %}
+                                                <span class="badge bg-primary ms-1">You</span>
                                                 {% endif %}
-                                                {{ file.created_at|date:"M d, Y" }}
+                                                {% if file.is_public %}
+                                                • <span class="badge bg-info">Public</span>
+                                                {% endif %}
                                             </small>
                                         </div>
+                                        {% if file.owner == user %}
                                         <div class="dropdown">
                                             <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" onclick="event.stopPropagation()">
                                                 <i class="fas fa-ellipsis-v"></i>
@@ -329,6 +361,7 @@
                                                </a></li>
                                             </ul>
                                         </div>
+                                        {% endif %}
                                     </div>
                                 </div>
                             </div>
@@ -398,6 +431,597 @@
                     </nav>
                 </div>
                 {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Maps Section -->
+{% if all_maps %}
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <h5 class="mb-0 me-3">
+                        <i class="fas fa-map me-2"></i>Maps
+                    </h5>
+                    <span class="badge bg-secondary">{{ all_maps|length }} maps</span>
+                </div>
+                <div class="btn-group" role="group" aria-label="Maps view toggle">
+                    <button type="button" class="btn btn-sm btn-outline-secondary active" id="mapsListViewBtn" onclick="toggleSectionView('maps', 'list')">
+                        <i class="fas fa-list"></i> List
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="mapsPanelViewBtn" onclick="toggleSectionView('maps', 'panel')">
+                        <i class="fas fa-th"></i> Panels
+                    </button>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                <!-- Maps List View -->
+                <div id="mapsListView" class="view-container">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Layers</th>
+                                    <th>Owner</th>
+                                    <th>Status</th>
+                                    <th>Created</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for map in all_maps %}
+                                <tr style="cursor: pointer;" onclick="window.location.href='{% if map.owner == user %}{% url 'filemanager:map_detail' map.id %}{% else %}{% url 'filemanager:public_map_detail' map.id %}{% endif %}'">
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-map me-3" style="color: #ffc107;"></i>
+                                            <div>
+                                                <strong>{{ map.name }}</strong>
+                                                {% if map.description %}
+                                                <br><small class="text-muted">{{ map.description|truncatechars:50 }}</small>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="badge bg-info">{{ map.map_layers.count }} layers</span></td>
+                                    <td>
+                                        <small>{{ map.owner.username }}</small>
+                                        {% if map.owner == user %}
+                                        <span class="badge bg-primary ms-1">You</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if map.is_public %}
+                                        <span class="badge bg-success">Public</span>
+                                        {% else %}
+                                        <span class="badge bg-secondary">Private</span>
+                                        {% endif %}
+                                    </td>
+                                    <td><small>{{ map.created_at|date:"M d, Y" }}</small></td>
+                                    <td onclick="event.stopPropagation()">
+                                        <div class="dropdown">
+                                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown">
+                                                <i class="fas fa-ellipsis-v"></i>
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li>
+                                                    <a class="dropdown-item" href="{% if map.owner == user %}{% url 'filemanager:map_detail' map.id %}{% else %}{% url 'filemanager:public_map_detail' map.id %}{% endif %}">
+                                                        <i class="fas fa-eye me-2"></i>View Map
+                                                    </a>
+                                                </li>
+                                                {% if map.owner == user %}
+                                                <li>
+                                                    <a class="dropdown-item text-danger" href="#" onclick="deleteMap('{{ map.id }}', '{{ map.name }}')">
+                                                        <i class="fas fa-trash me-2"></i>Delete
+                                                    </a>
+                                                </li>
+                                                {% endif %}
+                                            </ul>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- Maps Panel View -->
+                <div id="mapsPanelView" class="view-container" style="display: none;">
+                    <div class="row">
+                        {% for map in all_maps %}
+                        <div class="col-md-4 col-sm-6 mb-3">
+                            <div class="card h-100 border-warning" style="cursor: pointer;" onclick="window.location.href='{% if map.owner == user %}{% url 'filemanager:map_detail' map.id %}{% else %}{% url 'filemanager:public_map_detail' map.id %}{% endif %}'">
+                                <div class="card-body">
+                                    <div class="d-flex align-items-start">
+                                        <i class="fas fa-map fa-2x me-3" style="color: #ffc107;"></i>
+                                        <div class="flex-grow-1">
+                                            <h6 class="card-title mb-1">{{ map.name }}</h6>
+                                            {% if map.description %}
+                                            <p class="card-text text-muted small mb-2">{{ map.description|truncatechars:60 }}</p>
+                                            {% endif %}
+                                            <div class="d-flex flex-wrap gap-1 mb-2">
+                                                <span class="badge bg-info">{{ map.map_layers.count }} layers</span>
+                                                {% if map.is_public %}
+                                                <span class="badge bg-success">Public</span>
+                                                {% else %}
+                                                <span class="badge bg-secondary">Private</span>
+                                                {% endif %}
+                                                {% if map.owner == user %}
+                                                <span class="badge bg-primary">Yours</span>
+                                                {% endif %}
+                                            </div>
+                                            <small class="text-muted">
+                                                <i class="fas fa-user me-1"></i>{{ map.owner.username }} • {{ map.created_at|date:"M d, Y" }}
+                                            </small>
+                                        </div>
+                                        <div class="dropdown" onclick="event.stopPropagation()">
+                                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown">
+                                                <i class="fas fa-ellipsis-v"></i>
+                                            </button>
+                                            <ul class="dropdown-menu dropdown-menu-end">
+                                                <li>
+                                                    <a class="dropdown-item" href="{% if map.owner == user %}{% url 'filemanager:map_detail' map.id %}{% else %}{% url 'filemanager:public_map_detail' map.id %}{% endif %}">
+                                                        <i class="fas fa-eye me-2"></i>View Map
+                                                    </a>
+                                                </li>
+                                                {% if map.owner == user %}
+                                                <li>
+                                                    <a class="dropdown-item text-danger" href="#" onclick="deleteMap('{{ map.id }}', '{{ map.name }}')">
+                                                        <i class="fas fa-trash me-2"></i>Delete
+                                                    </a>
+                                                </li>
+                                                {% endif %}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Third-Party Data Section -->
+{% if third_party_folders or third_party_files %}
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <h5 class="mb-0 me-3">
+                        <i class="fas fa-cloud me-2"></i>Third-Party Data
+                    </h5>
+                    <span class="badge bg-secondary">{{ total_third_party_folders }} folders, {{ total_third_party_files }} files</span>
+                </div>
+                <div class="btn-group" role="group" aria-label="Third-party data view toggle">
+                    <button type="button" class="btn btn-sm btn-outline-secondary active" id="thirdPartyListViewBtn" onclick="toggleSectionView('thirdParty', 'list')">
+                        <i class="fas fa-list"></i> List
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="thirdPartyPanelViewBtn" onclick="toggleSectionView('thirdParty', 'panel')">
+                        <i class="fas fa-th"></i> Panels
+                    </button>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                <!-- Third-Party Data List View -->
+                <div id="thirdPartyListView" class="view-container">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Size</th>
+                                    <th>Source</th>
+                                    <th>Created</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Third-Party Folders -->
+                                {% for folder in third_party_folders %}
+                                <tr data-folder-id="{{ folder.id }}" style="cursor: pointer;" onclick="window.location.href='{% url 'filemanager:folder_detail' folder.id %}'">
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-folder folder-icon me-3"></i>
+                                            <div>
+                                                <strong>{{ folder.name }}</strong>
+                                                {% if folder.is_public %}
+                                                    <span class="badge bg-info ms-2">Public</span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="text-muted">Folder</span></td>
+                                    <td><span class="text-muted">{{ folder.content_summary }}</span></td>
+                                    <td>
+                                        <span class="badge bg-purple" style="background-color: #6f42c1;">
+                                            <i class="fas fa-cloud me-1"></i>{{ folder.third_party_source|default:"External" }}
+                                        </span>
+                                    </td>
+                                    <td><small>{{ folder.created_at|date:"M d, Y" }}</small></td>
+                                    <td>
+                                        <div class="dropdown" onclick="event.stopPropagation()">
+                                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown">
+                                                <i class="fas fa-ellipsis-v"></i>
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li><a class="dropdown-item" href="{% url 'filemanager:folder_detail' folder.id %}">
+                                                    <i class="fas fa-eye me-2"></i>View
+                                                </a></li>
+                                                <li><a class="dropdown-item text-danger" href="#" onclick="deleteItem('folder', '{{ folder.id }}', '{{ folder.name }}')">
+                                                    <i class="fas fa-trash me-2"></i>Delete
+                                                </a></li>
+                                            </ul>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                
+                                <!-- Third-Party Files -->
+                                {% for file in third_party_files %}
+                                <tr data-file-id="{{ file.id }}" style="cursor: pointer;" onclick="window.location.href='{% url 'filemanager:file_detail' file.id %}'">
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="{{ file.get_icon_class }} me-3"></i>
+                                            <div>
+                                                <strong>{{ file.name }}</strong>
+                                                {% if file.is_public %}
+                                                    <span class="badge bg-info ms-2">Public</span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-secondary">{{ file.file_type|title }}</span>
+                                        {% if file.is_spatial %}
+                                            <span class="badge bg-info ms-1">GIS</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ file.get_size_display }}</td>
+                                    <td>
+                                        <span class="badge bg-purple" style="background-color: #6f42c1;">
+                                            <i class="fas fa-cloud me-1"></i>{{ file.third_party_source|default:"External" }}
+                                        </span>
+                                    </td>
+                                    <td><small>{{ file.created_at|date:"M d, Y" }}</small></td>
+                                    <td>
+                                        <div class="dropdown" onclick="event.stopPropagation()">
+                                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown">
+                                                <i class="fas fa-ellipsis-v"></i>
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li><a class="dropdown-item" href="{% url 'filemanager:download_file' file.id %}">
+                                                    <i class="fas fa-download me-2"></i>Download
+                                                </a></li>
+                                                {% if file.third_party_url %}
+                                                <li><a class="dropdown-item" href="{{ file.third_party_url }}" target="_blank">
+                                                    <i class="fas fa-external-link-alt me-2"></i>View on {{ file.third_party_source|default:"Source" }}
+                                                </a></li>
+                                                {% endif %}
+                                                {% if file.is_spatial %}
+                                                <li><a class="dropdown-item" href="{% url 'filemanager:map_viewer' file.id %}">
+                                                    <i class="fas fa-map-marked-alt me-2"></i>View on Map
+                                                </a></li>
+                                                {% endif %}
+                                                <li><a class="dropdown-item text-danger" href="#" onclick="deleteItem('file', '{{ file.id }}', '{{ file.name }}')">
+                                                    <i class="fas fa-trash me-2"></i>Delete
+                                                </a></li>
+                                            </ul>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- Third-Party Data Panel View -->
+                <div id="thirdPartyPanelView" class="view-container" style="display: none;">
+                    <!-- Third-Party Folders -->
+                    {% if third_party_folders %}
+                    <div class="mb-4">
+                        <h6 class="text-muted mb-3"><i class="fas fa-folder me-2"></i>Third-Party Folders</h6>
+                        <div class="row">
+                            {% for folder in third_party_folders %}
+                            <div class="col-md-4 col-sm-6 mb-3">
+                                <div class="folder-item" data-folder-id="{{ folder.id }}" onclick="window.location.href='{% url 'filemanager:folder_detail' folder.id %}'">
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-folder folder-icon"></i>
+                                        <div class="flex-grow-1">
+                                            <h6 class="mb-1 fw-bold">{{ folder.name }}</h6>
+                                            <small class="text-muted">
+                                                {{ folder.content_summary }}
+                                            </small>
+                                            <br>
+                                            <small>
+                                                <span class="badge bg-purple" style="background-color: #6f42c1;">
+                                                    <i class="fas fa-cloud me-1"></i>{{ folder.third_party_source|default:"External" }}
+                                                </span>
+                                                {% if folder.is_public %}
+                                                <span class="badge bg-info ms-1">Public</span>
+                                                {% endif %}
+                                            </small>
+                                        </div>
+                                        <div class="dropdown">
+                                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" onclick="event.stopPropagation()">
+                                                <i class="fas fa-ellipsis-v"></i>
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li><a class="dropdown-item text-danger" href="#" onclick="deleteItem('folder', '{{ folder.id }}', '{{ folder.name }}')">
+                                                    <i class="fas fa-trash me-2"></i>Delete
+                                                </a></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    
+                    <!-- Third-Party Files -->
+                    {% if third_party_files %}
+                    <div>
+                        <h6 class="text-muted mb-3"><i class="fas fa-file me-2"></i>Third-Party Files</h6>
+                        <div class="row">
+                            {% for file in third_party_files %}
+                            <div class="col-md-4 col-sm-6 mb-3">
+                                <div class="file-item" data-file-id="{{ file.id }}" onclick="window.location.href='{% url 'filemanager:file_detail' file.id %}'">
+                                    <div class="d-flex align-items-center">
+                                        <i class="{{ file.get_icon_class }}" style="font-size: 2rem; margin-right: 12px;"></i>
+                                        <div class="flex-grow-1">
+                                            <h6 class="mb-1 fw-bold">{{ file.name|truncatechars:25 }}</h6>
+                                            <small class="text-muted">
+                                                {{ file.get_size_display }}
+                                                {% if file.is_spatial %}
+                                                <span class="badge bg-info ms-1">GIS</span>
+                                                {% endif %}
+                                            </small>
+                                            <br>
+                                            <small>
+                                                <span class="badge bg-purple" style="background-color: #6f42c1;">
+                                                    <i class="fas fa-cloud me-1"></i>{{ file.third_party_source|default:"External" }}
+                                                </span>
+                                                {% if file.is_public %}
+                                                <span class="badge bg-info ms-1">Public</span>
+                                                {% endif %}
+                                            </small>
+                                        </div>
+                                        <div class="dropdown">
+                                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" onclick="event.stopPropagation()">
+                                                <i class="fas fa-ellipsis-v"></i>
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li><a class="dropdown-item" href="{% url 'filemanager:download_file' file.id %}">
+                                                    <i class="fas fa-download me-2"></i>Download
+                                                </a></li>
+                                                {% if file.third_party_url %}
+                                                <li><a class="dropdown-item" href="{{ file.third_party_url }}" target="_blank">
+                                                    <i class="fas fa-external-link-alt me-2"></i>View on {{ file.third_party_source|default:"Source" }}
+                                                </a></li>
+                                                {% endif %}
+                                                <li><a class="dropdown-item text-danger" href="#" onclick="deleteItem('file', '{{ file.id }}', '{{ file.name }}')">
+                                                    <i class="fas fa-trash me-2"></i>Delete
+                                                </a></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Tools Section -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <h5 class="mb-0 me-3">
+                        <i class="fas fa-tools me-2"></i>Tools
+                    </h5>
+                    <span class="badge bg-secondary">5 tools</span>
+                </div>
+                <div class="btn-group" role="group" aria-label="Tools view toggle">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="toolsListViewBtn" onclick="toggleSectionView('tools', 'list')">
+                        <i class="fas fa-list"></i> List
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary active" id="toolsPanelViewBtn" onclick="toggleSectionView('tools', 'panel')">
+                        <i class="fas fa-th"></i> Panels
+                    </button>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                <!-- Tools List View -->
+                <div id="toolsListView" class="view-container" style="display: none;">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Tool</th>
+                                    <th>Description</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-seedling me-3 text-warning" style="font-size: 1.5rem;"></i>
+                                            <strong>Seeding Tool</strong>
+                                        </div>
+                                    </td>
+                                    <td><small class="text-muted">Process point shapefiles to create seeding polygons, boundaries, and summary statistics.</small></td>
+                                    <td><span class="badge bg-success">Available</span></td>
+                                    <td>
+                                        <a href="{% url 'filemanager:seeding_tool' %}" class="btn btn-sm btn-warning">
+                                            <i class="fas fa-play me-1"></i>Launch
+                                        </a>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-exchange-alt me-3 text-primary" style="font-size: 1.5rem;"></i>
+                                            <strong>Shape to JSON</strong>
+                                        </div>
+                                    </td>
+                                    <td><small class="text-muted">Convert shapefiles to GeoJSON format for web mapping.</small></td>
+                                    <td><span class="badge bg-success">Available</span></td>
+                                    <td>
+                                        <a href="{% url 'filemanager:shape_to_json_tool' %}" class="btn btn-sm btn-primary">
+                                            <i class="fas fa-play me-1"></i>Launch
+                                        </a>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-chart-line me-3 text-success" style="font-size: 1.5rem;"></i>
+                                            <strong>SI Tool</strong>
+                                        </div>
+                                    </td>
+                                    <td><small class="text-muted">Calculate Stress Index values from NDRE and buffer sector data.</small></td>
+                                    <td><span class="badge bg-success">Available</span></td>
+                                    <td>
+                                        <a href="{% url 'filemanager:si_tool' %}" class="btn btn-sm btn-success">
+                                            <i class="fas fa-play me-1"></i>Launch
+                                        </a>
+                                    </td>
+                                </tr>
+                                <tr class="opacity-50">
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-chart-bar me-3 text-secondary" style="font-size: 1.5rem;"></i>
+                                            <strong class="text-muted">Yield Analysis</strong>
+                                        </div>
+                                    </td>
+                                    <td><small class="text-muted">Analyze yield data and generate reports.</small></td>
+                                    <td><span class="badge bg-secondary">Coming Soon</span></td>
+                                    <td>
+                                        <button class="btn btn-sm btn-secondary" disabled>
+                                            <i class="fas fa-clock me-1"></i>Soon
+                                        </button>
+                                    </td>
+                                </tr>
+                                <tr class="opacity-50">
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-layer-group me-3 text-secondary" style="font-size: 1.5rem;"></i>
+                                            <strong class="text-muted">Layer Merge</strong>
+                                        </div>
+                                    </td>
+                                    <td><small class="text-muted">Merge multiple GIS layers into a single file.</small></td>
+                                    <td><span class="badge bg-secondary">Coming Soon</span></td>
+                                    <td>
+                                        <button class="btn btn-sm btn-secondary" disabled>
+                                            <i class="fas fa-clock me-1"></i>Soon
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- Tools Panel View -->
+                <div id="toolsPanelView" class="view-container">
+                    <div class="row">
+                        <!-- Seeding Tool -->
+                        <div class="col-lg-4 col-md-6 mb-3">
+                            <a href="{% url 'filemanager:seeding_tool' %}" class="text-decoration-none">
+                                <div class="card h-100 border-warning tool-panel-card">
+                                    <div class="card-body text-center">
+                                        <i class="fas fa-seedling fa-3x text-warning mb-3"></i>
+                                        <h5 class="card-title text-dark">Seeding Tool</h5>
+                                        <p class="card-text text-muted small">
+                                            Process point shapefiles to create seeding polygons, boundaries, and summary statistics.
+                                        </p>
+                                    </div>
+                                </div>
+                            </a>
+                        </div>
+                        
+                        <!-- Shape to JSON Tool -->
+                        <div class="col-lg-4 col-md-6 mb-3">
+                            <a href="{% url 'filemanager:shape_to_json_tool' %}" class="text-decoration-none">
+                                <div class="card h-100 border-primary tool-panel-card">
+                                    <div class="card-body text-center">
+                                        <i class="fas fa-exchange-alt fa-3x text-primary mb-3"></i>
+                                        <h5 class="card-title text-dark">Shape to JSON</h5>
+                                        <p class="card-text text-muted small">
+                                            Convert shapefiles to GeoJSON format for web mapping.
+                                        </p>
+                                    </div>
+                                </div>
+                            </a>
+                        </div>
+                        
+                        <!-- SI Tool -->
+                        <div class="col-lg-4 col-md-6 mb-3">
+                            <a href="{% url 'filemanager:si_tool' %}" class="text-decoration-none">
+                                <div class="card h-100 border-success tool-panel-card">
+                                    <div class="card-body text-center">
+                                        <i class="fas fa-chart-line fa-3x text-success mb-3"></i>
+                                        <h5 class="card-title text-dark">SI Tool</h5>
+                                        <p class="card-text text-muted small">
+                                            Calculate Stress Index values from NDRE and buffer sector data.
+                                        </p>
+                                    </div>
+                                </div>
+                            </a>
+                        </div>
+                        
+                        <!-- Placeholder for future tools -->
+                        <div class="col-lg-4 col-md-6 mb-3">
+                            <div class="card h-100 border-secondary opacity-50">
+                                <div class="card-body text-center">
+                                    <i class="fas fa-chart-bar fa-3x text-secondary mb-3"></i>
+                                    <h5 class="card-title text-muted">Yield Analysis</h5>
+                                    <p class="card-text text-muted small">
+                                        Analyze yield data and generate reports. Coming soon.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-lg-4 col-md-6 mb-3">
+                            <div class="card h-100 border-secondary opacity-50">
+                                <div class="card-body text-center">
+                                    <i class="fas fa-layer-group fa-3x text-secondary mb-3"></i>
+                                    <h5 class="card-title text-muted">Layer Merge</h5>
+                                    <p class="card-text text-muted small">
+                                        Merge multiple GIS layers into a single file. Coming soon.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -975,7 +1599,39 @@ async function deleteItem(type, id, name) {
     }
 }
 
-// View Toggle Functions
+// Delete map function
+async function deleteMap(id, name) {
+    if (!confirm(`Are you sure you want to delete the map "${name}"?`)) return;
+    
+    try {
+        const response = await fetch('{% url "filemanager:delete_item" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken
+            },
+            body: JSON.stringify({
+                type: 'map',
+                id: id
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('success', `Map "${name}" deleted successfully`);
+            // Reload page to refresh the maps list
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast('error', data.error || 'Error deleting map');
+        }
+    } catch (error) {
+        console.error('Delete map error:', error);
+        showToast('error', 'Error deleting map: ' + error.message);
+    }
+}
+
+// View Toggle Functions for Files & Folders
 function toggleView(viewType) {
     const listView = document.getElementById('listView');
     const panelView = document.getElementById('panelView');
@@ -994,6 +1650,30 @@ function toggleView(viewType) {
         listBtn.classList.remove('active');
         panelBtn.classList.add('active');
         localStorage.setItem('fileViewType', 'panel');
+    }
+}
+
+// Generic View Toggle for other sections (maps, public, tools)
+function toggleSectionView(section, viewType) {
+    const listView = document.getElementById(`${section}ListView`);
+    const panelView = document.getElementById(`${section}PanelView`);
+    const listBtn = document.getElementById(`${section}ListViewBtn`);
+    const panelBtn = document.getElementById(`${section}PanelViewBtn`);
+    
+    if (!listView || !panelView) return;
+    
+    if (viewType === 'list') {
+        listView.style.display = 'block';
+        panelView.style.display = 'none';
+        if (listBtn) listBtn.classList.add('active');
+        if (panelBtn) panelBtn.classList.remove('active');
+        localStorage.setItem(`${section}ViewType`, 'list');
+    } else {
+        listView.style.display = 'none';
+        panelView.style.display = 'block';
+        if (listBtn) listBtn.classList.remove('active');
+        if (panelBtn) panelBtn.classList.add('active');
+        localStorage.setItem(`${section}ViewType`, 'panel');
     }
 }
 
@@ -1017,10 +1697,23 @@ function refreshStats() {
         });
 }
 
-// Load saved view preference on page load
+// Load saved view preferences on page load
 document.addEventListener('DOMContentLoaded', function() {
+    // Files & Folders view preference
     const savedView = localStorage.getItem('fileViewType') || 'list';
     toggleView(savedView);
+    
+    // Maps view preference (default: list)
+    const savedMapsView = localStorage.getItem('mapsViewType') || 'list';
+    toggleSectionView('maps', savedMapsView);
+    
+    // Third-Party Data view preference (default: list)
+    const savedThirdPartyView = localStorage.getItem('thirdPartyViewType') || 'list';
+    toggleSectionView('thirdParty', savedThirdPartyView);
+    
+    // Tools view preference (default: panel)
+    const savedToolsView = localStorage.getItem('toolsViewType') || 'panel';
+    toggleSectionView('tools', savedToolsView);
 });
 </script>
 {% endblock %}

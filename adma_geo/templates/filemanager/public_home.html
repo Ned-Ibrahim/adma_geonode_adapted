@@ -163,6 +163,59 @@
     </div>
 </div>
 
+<!-- Public Maps Section -->
+{% if public_maps %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex align-items-center">
+                    <h4 class="mb-0 me-3">
+                        <i class="fas fa-map me-2"></i>Public Maps
+                    </h4>
+                    <span class="badge bg-secondary">{{ stats.total_public_maps }} maps</span>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Layers</th>
+                                <th>Owner</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for map in public_maps %}
+                            <tr style="cursor: pointer;" onclick="window.location.href='{% url 'filemanager:public_map_detail' map.id %}'">
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-map file-icon" style="color: #ffc107;"></i>
+                                        <div>
+                                            <div class="fw-bold">{{ map.name }}</div>
+                                            {% if map.description %}
+                                            <small class="text-muted">{{ map.description|truncatechars:50 }}</small>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </td>
+                                <td><span class="badge bg-info">{{ map.map_layers.count }} layers</span></td>
+                                <td><small>{{ map.owner.username }}</small></td>
+                                <td><small>{{ map.created_at|date:"M d, Y" }}</small></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- Public Data Section -->
 {% if public_folders or public_files %}
 <div class="row">
@@ -173,7 +226,7 @@
                     <h4 class="mb-0 me-3">
                         <i class="fas fa-database me-2"></i>Public Data
                     </h4>
-                    <span class="badge bg-secondary">{{ total_items }} total items</span>
+                    <span class="badge bg-secondary">{{ stats.total_public_folders }} folders, {{ stats.total_public_files }} files</span>
                 </div>
                 
                 <!-- View Toggle -->
@@ -242,27 +295,6 @@
                                     <td><small>{{ file.created_at|date:"M d, Y" }}</small></td>
                                 </tr>
                                 {% endfor %}
-                                
-                                <!-- Maps third -->
-                                {% for map in public_maps %}
-                                <tr>
-                                    <td>
-                                        <a href="{% url 'filemanager:public_map_detail' map.id %}" class="text-decoration-none d-flex align-items-center">
-                                            <i class="fas fa-map file-icon"></i>
-                                            <div>
-                                                <div class="fw-bold">{{ map.name }}</div>
-                                            </div>
-                                        </a>
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-warning">Map</span>
-                                        <span class="badge bg-info ms-1">GIS</span>
-                                    </td>
-                                    <td><small>{{ map.map_layers.count }} layers</small></td>
-                                    <td><small>{{ map.owner.username }}</small></td>
-                                    <td><small>{{ map.created_at|date:"M d, Y" }}</small></td>
-                                </tr>
-                                {% endfor %}
                             </tbody>
                         </table>
                     </div>
@@ -312,31 +344,10 @@
                             </a>
                         </div>
                         {% endfor %}
-                        
-                        <!-- Maps third -->
-                        {% for map in public_maps %}
-                        <div class="col-md-4 col-sm-6 mb-3">
-                            <a href="{% url 'filemanager:public_map_detail' map.id %}" class="text-decoration-none">
-                                <div class="file-item map-item">
-                                    <i class="fas fa-map file-icon"></i>
-                                    <div class="flex-grow-1">
-                                        <h6 class="mb-1 fw-bold">{{ map.name|truncatechars:25 }}</h6>
-                                        <small class="text-muted">
-                                            {{ map.map_layers.count }} layers
-                                        </small>
-                                        <br>
-                                        <small class="text-muted">
-                                            by {{ map.owner.username }} • {{ map.created_at|date:"M d, Y" }}
-                                        </small>
-                                    </div>
-                                </div>
-                            </a>
-                        </div>
-                        {% endfor %}
                     </div>
                 </div>
                 
-                <!-- Unified Pagination -->
+                <!-- Pagination -->
                 {% if page_obj.has_other_pages %}
                 <nav aria-label="Public data pagination" class="mt-4">
                     <ul class="pagination justify-content-center">
@@ -393,7 +404,7 @@
 {% endif %}
 
 <!-- No Public Content -->
-{% if not public_folders and not public_files %}
+{% if not public_folders and not public_files and not public_maps %}
 <div class="row">
     <div class="col-12">
         <div class="text-center py-5">
