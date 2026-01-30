@@ -536,31 +536,23 @@ def run_seeding_tool_task(self, file_id, output_dir_id=None):
                 logger.error(f"Error creating file record for {file_path}: {e}")
                 return None
         
-        # Process all output files including shapefile components
-        for file_type, file_value in output_files.items():
-            # Skip component lists - they are processed via their parent keys
-            if file_type.endswith('_components'):
-                continue
-            
-            if isinstance(file_value, str):
-                # Single file path (e.g., 'polygons', 'boundary', 'summary')
-                result = create_file_record(file_value)
-                if result:
-                    created_files.append(result)
-            elif isinstance(file_value, list):
-                # List of file paths
-                for file_path in file_value:
-                    result = create_file_record(file_path)
-                    if result:
-                        created_files.append(result)
-        
-        # Also process shapefile components explicitly
+        # Process shapefile components (all files in polygons_components and boundary_components)
         for component_key in ['polygons_components', 'boundary_components']:
             if component_key in output_files:
                 for file_path in output_files[component_key]:
                     result = create_file_record(file_path)
                     if result:
                         created_files.append(result)
+        
+        # Process CSV summary file
+        if 'summary' in output_files:
+            summary_path = output_files['summary']
+            logger.info(f"Processing summary CSV: {summary_path}")
+            result = create_file_record(summary_path)
+            if result:
+                created_files.append(result)
+            else:
+                logger.warning(f"Failed to create file record for summary: {summary_path}")
         
         # Update source file processing log
         file_obj.processing_log = (file_obj.processing_log or "") + f"\n✓ Seeding Tool completed: {message}"
