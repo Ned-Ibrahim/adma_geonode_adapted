@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 
+# Celery Beat schedule file
+celerybeat-schedule
+celerybeat-schedule.*
+
 # C extensions
 *.so
 
