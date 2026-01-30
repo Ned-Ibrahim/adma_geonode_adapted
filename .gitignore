@@ -3,8 +3,8 @@ __pycache__/
 *.py[cod]
 
 # Celery Beat schedule file
-celerybeat-schedule
-celerybeat-schedule.*
+adma_geo/celerybeat-schedule
+adma_geo/celerybeat-schedule.*
 
 # C extensions
 *.so
