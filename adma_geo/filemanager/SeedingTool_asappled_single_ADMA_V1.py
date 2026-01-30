@@ -125,8 +125,11 @@ def process_seeding_tool(input_path: str, output_dir: str) -> Tuple[bool, str, D
         # SAVE OUTPUTS (SHAPEFILE ONLY)
         base_name = os.path.splitext(os.path.basename(input_path))[0]
 
-        polys_path = os.path.join(output_dir, f"{base_name}_seeding_polys.shp")
-        boundary_path = os.path.join(output_dir, f"{base_name}_boundary.shp")
+        polys_base = f"{base_name}_seeding_polys"
+        boundary_base = f"{base_name}_boundary"
+        
+        polys_path = os.path.join(output_dir, f"{polys_base}.shp")
+        boundary_path = os.path.join(output_dir, f"{boundary_base}.shp")
         csv_path = os.path.join(output_dir, f"{base_name}_summary.csv")
 
         clipped.columns = [c if c == "geometry" else c[:10] for c in clipped.columns]
@@ -135,8 +138,24 @@ def process_seeding_tool(input_path: str, output_dir: str) -> Tuple[bool, str, D
         clipped.to_file(polys_path)
         boundary.to_file(boundary_path)
 
+        # Collect all shapefile component paths
+        shapefile_extensions = ['.shp', '.shx', '.dbf', '.prj', '.cpg']
+        
+        # Polygons shapefile components
         output_files['polygons'] = polys_path
+        output_files['polygons_components'] = []
+        for ext in shapefile_extensions:
+            component_path = os.path.join(output_dir, f"{polys_base}{ext}")
+            if os.path.exists(component_path):
+                output_files['polygons_components'].append(component_path)
+        
+        # Boundary shapefile components
         output_files['boundary'] = boundary_path
+        output_files['boundary_components'] = []
+        for ext in shapefile_extensions:
+            component_path = os.path.join(output_dir, f"{boundary_base}{ext}")
+            if os.path.exists(component_path):
+                output_files['boundary_components'].append(component_path)
 
         # AREA SUMMARY
         m = clipped.to_crs(clipped.estimate_utm_crs()).copy()

@@ -61,6 +61,11 @@ services:
       GEOSERVER_ADMIN_PASSWORD: geoserver123
       # Realm5 API (loaded from .env file)
       REALM5_API_KEY: ${REALM5_API_KEY}
+      # John Deere API (loaded from .env file)
+      JD_CLIENT_ID: ${JD_CLIENT_ID}
+      JD_CLIENT_SECRET: ${JD_CLIENT_SECRET}
+      JD_REFRESH_TOKEN: ${JD_REFRESH_TOKEN}
+      JD_ORG_ID: ${JD_ORG_ID}
     depends_on:
       db:
         condition: service_healthy
@@ -94,6 +99,11 @@ services:
       GEOSERVER_ADMIN_PASSWORD: geoserver123
       # Realm5 API (loaded from .env file)
       REALM5_API_KEY: ${REALM5_API_KEY}
+      # John Deere API (loaded from .env file)
+      JD_CLIENT_ID: ${JD_CLIENT_ID}
+      JD_CLIENT_SECRET: ${JD_CLIENT_SECRET}
+      JD_REFRESH_TOKEN: ${JD_REFRESH_TOKEN}
+      JD_ORG_ID: ${JD_ORG_ID}
     depends_on:
       db:
         condition: service_healthy
@@ -124,6 +134,11 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       # Realm5 API (loaded from .env file)
       REALM5_API_KEY: ${REALM5_API_KEY}
+      # John Deere API (loaded from .env file)
+      JD_CLIENT_ID: ${JD_CLIENT_ID}
+      JD_CLIENT_SECRET: ${JD_CLIENT_SECRET}
+      JD_REFRESH_TOKEN: ${JD_REFRESH_TOKEN}
+      JD_ORG_ID: ${JD_ORG_ID}
     depends_on:
       db:
         condition: service_healthy

@@ -480,68 +480,105 @@ def run_seeding_tool_task(self, file_id, output_dir_id=None):
         # Create File records for the output files
         created_files = []
         
-        for file_type, file_path in output_files.items():
-            if os.path.exists(file_path):
-                try:
-                    # Calculate relative path for Django FileField
-                    media_root = settings.MEDIA_ROOT
-                    if file_path.startswith(str(media_root)):
-                        relative_path = os.path.relpath(file_path, media_root)
-                    else:
-                        relative_path = file_path
-                    
-                    file_name = os.path.basename(file_path)
-                    file_size = os.path.getsize(file_path)
-                    
-                    # Check if file already exists (by name and folder)
-                    existing_file = File.objects.filter(
+        # Helper function to create/update a file record
+        def create_file_record(file_path):
+            if not os.path.exists(file_path):
+                return None
+            try:
+                # Calculate relative path for Django FileField
+                media_root = settings.MEDIA_ROOT
+                if file_path.startswith(str(media_root)):
+                    relative_path = os.path.relpath(file_path, media_root)
+                else:
+                    relative_path = file_path
+                
+                file_name = os.path.basename(file_path)
+                file_size = os.path.getsize(file_path)
+                
+                # Check if file already exists (by name and folder)
+                existing_file = File.objects.filter(
+                    name=file_name,
+                    folder=output_folder_obj,
+                    owner=file_obj.owner
+                ).first()
+                
+                if existing_file:
+                    # Update existing file
+                    existing_file.file_size = file_size
+                    existing_file.save(update_fields=['file_size', 'updated_at'])
+                    logger.info(f"Updated existing file: {file_name}")
+                    return {
+                        'name': file_name,
+                        'id': str(existing_file.id),
+                        'updated': True
+                    }
+                else:
+                    # Create new file record in the output folder
+                    new_file = File(
                         name=file_name,
                         folder=output_folder_obj,
-                        owner=file_obj.owner
-                    ).first()
+                        owner=file_obj.owner,
+                        file_size=file_size,
+                        is_public=file_obj.is_public,  # Inherit visibility from source file
+                    )
+                    # Set the file field to the relative path
+                    new_file.file.name = relative_path
+                    new_file.save()
                     
-                    if existing_file:
-                        # Update existing file
-                        existing_file.file_size = file_size
-                        existing_file.save(update_fields=['file_size', 'updated_at'])
-                        created_files.append({
-                            'name': file_name,
-                            'id': str(existing_file.id),
-                            'updated': True
-                        })
-                        logger.info(f"Updated existing file: {file_name}")
-                    else:
-                        # Create new file record in the output folder
-                        new_file = File(
-                            name=file_name,
-                            folder=output_folder_obj,
-                            owner=file_obj.owner,
-                            file_size=file_size,
-                            is_public=file_obj.is_public,  # Inherit visibility from source file
-                        )
-                        # Set the file field to the relative path
-                        new_file.file.name = relative_path
-                        new_file.save()
-                        
-                        created_files.append({
-                            'name': file_name,
-                            'id': str(new_file.id),
-                            'updated': False
-                        })
-                        logger.info(f"Created new file record: {file_name}")
-                        
-                except Exception as e:
-                    logger.error(f"Error creating file record for {file_path}: {e}")
+                    logger.info(f"Created new file record: {file_name}")
+                    return {
+                        'name': file_name,
+                        'id': str(new_file.id),
+                        'updated': False
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Error creating file record for {file_path}: {e}")
+                return None
+        
+        # Process all output files including shapefile components
+        for file_type, file_value in output_files.items():
+            # Skip component lists - they are processed via their parent keys
+            if file_type.endswith('_components'):
+                continue
+            
+            if isinstance(file_value, str):
+                # Single file path (e.g., 'polygons', 'boundary', 'summary')
+                result = create_file_record(file_value)
+                if result:
+                    created_files.append(result)
+            elif isinstance(file_value, list):
+                # List of file paths
+                for file_path in file_value:
+                    result = create_file_record(file_path)
+                    if result:
+                        created_files.append(result)
+        
+        # Also process shapefile components explicitly
+        for component_key in ['polygons_components', 'boundary_components']:
+            if component_key in output_files:
+                for file_path in output_files[component_key]:
+                    result = create_file_record(file_path)
+                    if result:
+                        created_files.append(result)
         
         # Update source file processing log
         file_obj.processing_log = (file_obj.processing_log or "") + f"\n✓ Seeding Tool completed: {message}"
         file_obj.save(update_fields=['processing_log'])
         
+        # Build output_files dict with just basenames for the result
+        output_files_result = {}
+        for k, v in output_files.items():
+            if isinstance(v, str):
+                output_files_result[k] = os.path.basename(v)
+            elif isinstance(v, list):
+                output_files_result[k] = [os.path.basename(f) for f in v]
+        
         result = {
             "success": True,
             "message": message,
             "created_files": created_files,
-            "output_files": {k: os.path.basename(v) for k, v in output_files.items()}
+            "output_files": output_files_result
         }
         
         logger.info(f"Seeding Tool task completed successfully: {result}")
@@ -1157,3 +1194,451 @@ def sync_realm5_scheduled():
     """
     logger.info("Running scheduled Realm5 sync...")
     return sync_realm5_task.delay()
+
+
+@shared_task(bind=True)
+def sync_johndeere_task(self):
+    """
+    Sync John Deere Operations Center data to local storage.
+    
+    This task:
+    1. Uses refresh token to get a new access token
+    2. Fetches all fields for the configured organization
+    3. For each field:
+       - Creates a folder if it doesn't exist
+       - Saves field metadata as JSON
+       - Saves field boundaries as shapefile
+    4. For each field, fetches field operations:
+       - Creates a folder for each operation if it doesn't exist
+       - Saves operation metadata as JSON
+       - Saves operation boundary/coverage as shapefile (if available)
+    
+    The sync is incremental - it only creates folders/files that don't exist.
+    """
+    from django.conf import settings
+    from django.core.files.base import ContentFile
+    from .johndeere_client import JohnDeereClient
+    
+    logger.info("Starting John Deere sync task...")
+    
+    # Configuration from settings
+    JD_CLIENT_ID = getattr(settings, 'JD_CLIENT_ID', None)
+    JD_CLIENT_SECRET = getattr(settings, 'JD_CLIENT_SECRET', None)
+    JD_REFRESH_TOKEN = getattr(settings, 'JD_REFRESH_TOKEN', None)
+    JD_ORG_ID = getattr(settings, 'JD_ORG_ID', '4193081')  # Default org ID
+    
+    results = {
+        'success': True,
+        'fields_found': 0,
+        'field_folders_created': 0,
+        'field_files_created': 0,
+        'operations_found': 0,
+        'operation_folders_created': 0,
+        'operation_files_created': 0,
+        'errors': []
+    }
+    
+    # Validate configuration
+    if not all([JD_CLIENT_ID, JD_CLIENT_SECRET, JD_REFRESH_TOKEN]):
+        error_msg = "John Deere API credentials not configured. Set JD_CLIENT_ID, JD_CLIENT_SECRET, and JD_REFRESH_TOKEN in settings."
+        logger.error(error_msg)
+        results['success'] = False
+        results['errors'].append(error_msg)
+        return results
+    
+    try:
+        # Get the John Deere root folder
+        johndeere_folder = Folder.objects.filter(
+            name='John Deere',
+            parent=None,
+            is_third_party=True,
+            third_party_source='johndeere'
+        ).first()
+        
+        if not johndeere_folder:
+            error_msg = "John Deere root folder not found. Run 'python manage.py setup_johndeere' first."
+            logger.error(error_msg)
+            results['success'] = False
+            results['errors'].append(error_msg)
+            return results
+        
+        owner = johndeere_folder.owner
+        logger.info(f"Found John Deere root folder (ID: {johndeere_folder.id}, Owner: {owner.username})")
+        
+        # Initialize John Deere API client
+        client = JohnDeereClient(
+            client_id=JD_CLIENT_ID,
+            client_secret=JD_CLIENT_SECRET,
+            refresh_token=JD_REFRESH_TOKEN
+        )
+        
+        # Step 1: Get all fields for the organization
+        try:
+            fields = client.get_fields(JD_ORG_ID, embed_boundaries=True)
+            results['fields_found'] = len(fields)
+            logger.info(f"Found {len(fields)} fields from John Deere API for org {JD_ORG_ID}")
+        except Exception as e:
+            error_msg = f"Failed to fetch fields from John Deere API: {e}"
+            logger.error(error_msg)
+            results['success'] = False
+            results['errors'].append(error_msg)
+            return results
+        
+        # Step 2: Process each field
+        for field in fields:
+            field_id = field.get('id')
+            field_name = field.get('name', field_id)
+            
+            if not field_id:
+                logger.warning(f"Field missing ID: {field}")
+                continue
+            
+            logger.info(f"Processing field: {field_id} ({field_name})")
+            
+            # Check if folder exists for this field (using field ID as folder name)
+            field_folder = Folder.objects.filter(
+                name=field_id,
+                parent=johndeere_folder,
+                owner=owner
+            ).first()
+            
+            field_is_new = False
+            if not field_folder:
+                # Create new folder for this field
+                field_folder = Folder.objects.create(
+                    name=field_id,
+                    parent=johndeere_folder,
+                    owner=owner,
+                    is_public=True,
+                    is_third_party=True,
+                    third_party_source='johndeere',
+                    third_party_id=field_id,
+                )
+                results['field_folders_created'] += 1
+                field_is_new = True
+                logger.info(f"Created folder for field: {field_id}")
+            
+            # Only create metadata and boundary files if folder is new
+            if field_is_new:
+                # Save field metadata as JSON
+                metadata_filename = f"{field_id}_metadata.json"
+                field_metadata = {
+                    'id': field_id,
+                    'name': field_name,
+                    'archived': field.get('archived'),
+                    'source': field.get('source'),
+                    'activeStartDate': field.get('activeStartDate'),
+                    'activeEndDate': field.get('activeEndDate'),
+                    'links': field.get('links', []),
+                    'synced_at': str(date.today()),
+                }
+                
+                # Check if metadata file already exists
+                if not File.objects.filter(name=metadata_filename, folder=field_folder, owner=owner).exists():
+                    json_content = json.dumps(field_metadata, indent=2, default=str)
+                    metadata_file = File(
+                        name=metadata_filename,
+                        folder=field_folder,
+                        owner=owner,
+                        file_type='text',
+                        mime_type='application/json',
+                        is_public=True,
+                        is_third_party=True,
+                        third_party_source='johndeere',
+                        third_party_id=f"{field_id}_metadata",
+                    )
+                    metadata_file.file.save(metadata_filename, ContentFile(json_content.encode('utf-8')))
+                    metadata_file.file_size = len(json_content)
+                    metadata_file.save()
+                    results['field_files_created'] += 1
+                    logger.info(f"Created metadata file: {metadata_filename}")
+                
+                # Get and save field boundaries
+                boundaries = field.get('boundaries', [])
+                if not boundaries:
+                    # Fetch boundaries separately if not embedded
+                    try:
+                        boundaries = client.get_field_boundaries(JD_ORG_ID, field_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch boundaries for field {field_id}: {e}")
+                        boundaries = []
+                
+                for boundary in boundaries:
+                    boundary_id = boundary.get('id', 'boundary')
+                    boundary_name = boundary.get('name', boundary_id)
+                    shapefile_folder_name = f"{field_id}_{boundary_id}_boundary"
+                    
+                    # Check if shapefile folder already exists
+                    boundary_folder = Folder.objects.filter(
+                        name=shapefile_folder_name,
+                        parent=field_folder,
+                        owner=owner
+                    ).first()
+                    
+                    if boundary_folder:
+                        continue
+                    
+                    # Convert boundary to GeoJSON
+                    geojson = client.boundary_to_geojson(boundary)
+                    if not geojson:
+                        logger.warning(f"Could not convert boundary {boundary_id} to GeoJSON")
+                        continue
+                    
+                    # Convert GeoJSON to shapefile
+                    shp_components = client.geojson_to_shapefile_components(geojson, shapefile_folder_name)
+                    if not shp_components:
+                        # Save as GeoJSON instead (as a single file in the field folder)
+                        geojson_filename = f"{shapefile_folder_name}.geojson"
+                        if not File.objects.filter(name=geojson_filename, folder=field_folder, owner=owner).exists():
+                            geojson_content = json.dumps(geojson, indent=2)
+                            geojson_file = File(
+                                name=geojson_filename,
+                                folder=field_folder,
+                                owner=owner,
+                                file_type='archive',
+                                mime_type='application/geo+json',
+                                is_public=True,
+                                is_third_party=True,
+                                third_party_source='johndeere',
+                                third_party_id=f"{field_id}_{boundary_id}_geojson",
+                            )
+                            geojson_file.file.save(geojson_filename, ContentFile(geojson_content.encode('utf-8')))
+                            geojson_file.file_size = len(geojson_content)
+                            geojson_file.save()
+                            results['field_files_created'] += 1
+                            logger.info(f"Created GeoJSON file: {geojson_filename}")
+                        continue
+                    
+                    # Create a folder for the shapefile components
+                    boundary_folder = Folder.objects.create(
+                        name=shapefile_folder_name,
+                        parent=field_folder,
+                        owner=owner,
+                        is_public=True,
+                        is_third_party=True,
+                        third_party_source='johndeere',
+                        third_party_id=f"{field_id}_{boundary_id}_shp_folder",
+                    )
+                    results['field_folders_created'] += 1
+                    logger.info(f"Created shapefile folder: {shapefile_folder_name}")
+                    
+                    # Save each shapefile component as individual files
+                    for filename, content in shp_components.items():
+                        # Determine file type and mime type based on extension
+                        ext = filename.split('.')[-1].lower()
+                        mime_types = {
+                            'shp': 'application/x-esri-shapefile',
+                            'shx': 'application/x-esri-shapefile',
+                            'dbf': 'application/x-dbf',
+                            'prj': 'text/plain',
+                            'cpg': 'text/plain',
+                        }
+                        mime_type = mime_types.get(ext, 'application/octet-stream')
+                        
+                        shp_component_file = File(
+                            name=filename,
+                            folder=boundary_folder,
+                            owner=owner,
+                            file_type='archive' if ext in ['shp', 'shx', 'dbf'] else 'text',
+                            mime_type=mime_type,
+                            is_public=True,
+                            is_third_party=True,
+                            third_party_source='johndeere',
+                            third_party_id=f"{field_id}_{boundary_id}_{ext}",
+                        )
+                        shp_component_file.file.save(filename, ContentFile(content))
+                        shp_component_file.file_size = len(content)
+                        shp_component_file.save()
+                        results['field_files_created'] += 1
+                    
+                    logger.info(f"Created {len(shp_components)} shapefile components in folder: {shapefile_folder_name}")
+            
+            # Step 3: Get field operations for this field
+            try:
+                operations = client.get_field_operations(JD_ORG_ID, field_id)
+                results['operations_found'] += len(operations)
+                logger.info(f"Found {len(operations)} operations for field {field_id}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch operations for field {field_id}: {e}")
+                operations = []
+            
+            # Process each field operation
+            for operation in operations:
+                operation_id = operation.get('id')
+                operation_type = operation.get('operationType', 'unknown')
+                
+                if not operation_id:
+                    continue
+                
+                # Check if folder exists for this operation
+                operation_folder = Folder.objects.filter(
+                    name=operation_id,
+                    parent=field_folder,
+                    owner=owner
+                ).first()
+                
+                operation_is_new = False
+                if not operation_folder:
+                    # Create new folder for this operation
+                    operation_folder = Folder.objects.create(
+                        name=operation_id,
+                        parent=field_folder,
+                        owner=owner,
+                        is_public=True,
+                        is_third_party=True,
+                        third_party_source='johndeere',
+                        third_party_id=operation_id,
+                    )
+                    results['operation_folders_created'] += 1
+                    operation_is_new = True
+                    logger.info(f"Created folder for operation: {operation_id}")
+                
+                # Only create files if operation folder is new
+                if operation_is_new:
+                    # Save operation metadata as JSON
+                    op_metadata_filename = f"{operation_id}_metadata.json"
+                    
+                    if not File.objects.filter(name=op_metadata_filename, folder=operation_folder, owner=owner).exists():
+                        # Get detailed operation data
+                        try:
+                            detailed_operation = client.get_field_operation(operation_id)
+                            if detailed_operation:
+                                operation = detailed_operation
+                        except Exception as e:
+                            logger.warning(f"Failed to get detailed operation {operation_id}: {e}")
+                        
+                        operation_metadata = {
+                            'id': operation_id,
+                            'operationType': operation_type,
+                            'title': operation.get('title'),
+                            'startDate': operation.get('startDate'),
+                            'endDate': operation.get('endDate'),
+                            'archived': operation.get('archived'),
+                            'totalArea': operation.get('totalArea'),
+                            'links': operation.get('links', []),
+                            'synced_at': str(date.today()),
+                        }
+                        
+                        json_content = json.dumps(operation_metadata, indent=2, default=str)
+                        op_metadata_file = File(
+                            name=op_metadata_filename,
+                            folder=operation_folder,
+                            owner=owner,
+                            file_type='text',
+                            mime_type='application/json',
+                            is_public=True,
+                            is_third_party=True,
+                            third_party_source='johndeere',
+                            third_party_id=f"{operation_id}_metadata",
+                        )
+                        op_metadata_file.file.save(op_metadata_filename, ContentFile(json_content.encode('utf-8')))
+                        op_metadata_file.file_size = len(json_content)
+                        op_metadata_file.save()
+                        results['operation_files_created'] += 1
+                        logger.info(f"Created operation metadata file: {op_metadata_filename}")
+                    
+                    # Try to get operation boundary/coverage
+                    try:
+                        op_boundary = client.get_operation_boundary(operation_id)
+                        if op_boundary:
+                            op_shp_folder_name = f"{operation_id}_boundary"
+                            
+                            # Check if shapefile folder already exists
+                            op_boundary_folder = Folder.objects.filter(
+                                name=op_shp_folder_name,
+                                parent=operation_folder,
+                                owner=owner
+                            ).first()
+                            
+                            if not op_boundary_folder:
+                                # Convert to GeoJSON
+                                op_geojson = client.boundary_to_geojson(op_boundary)
+                                if op_geojson:
+                                    # Try to convert to shapefile
+                                    op_shp_components = client.geojson_to_shapefile_components(op_geojson, op_shp_folder_name)
+                                    
+                                    if op_shp_components:
+                                        # Create a folder for the shapefile components
+                                        op_boundary_folder = Folder.objects.create(
+                                            name=op_shp_folder_name,
+                                            parent=operation_folder,
+                                            owner=owner,
+                                            is_public=True,
+                                            is_third_party=True,
+                                            third_party_source='johndeere',
+                                            third_party_id=f"{operation_id}_boundary_shp_folder",
+                                        )
+                                        results['operation_folders_created'] += 1
+                                        logger.info(f"Created operation shapefile folder: {op_shp_folder_name}")
+                                        
+                                        # Save each shapefile component as individual files
+                                        for filename, content in op_shp_components.items():
+                                            ext = filename.split('.')[-1].lower()
+                                            mime_types = {
+                                                'shp': 'application/x-esri-shapefile',
+                                                'shx': 'application/x-esri-shapefile',
+                                                'dbf': 'application/x-dbf',
+                                                'prj': 'text/plain',
+                                                'cpg': 'text/plain',
+                                            }
+                                            mime_type = mime_types.get(ext, 'application/octet-stream')
+                                            
+                                            op_shp_component_file = File(
+                                                name=filename,
+                                                folder=op_boundary_folder,
+                                                owner=owner,
+                                                file_type='archive' if ext in ['shp', 'shx', 'dbf'] else 'text',
+                                                mime_type=mime_type,
+                                                is_public=True,
+                                                is_third_party=True,
+                                                third_party_source='johndeere',
+                                                third_party_id=f"{operation_id}_boundary_{ext}",
+                                            )
+                                            op_shp_component_file.file.save(filename, ContentFile(content))
+                                            op_shp_component_file.file_size = len(content)
+                                            op_shp_component_file.save()
+                                            results['operation_files_created'] += 1
+                                        
+                                        logger.info(f"Created {len(op_shp_components)} shapefile components in folder: {op_shp_folder_name}")
+                                    else:
+                                        # Save as GeoJSON (as a single file in the operation folder)
+                                        op_geojson_filename = f"{op_shp_folder_name}.geojson"
+                                        if not File.objects.filter(name=op_geojson_filename, folder=operation_folder, owner=owner).exists():
+                                            geojson_content = json.dumps(op_geojson, indent=2)
+                                            op_geojson_file = File(
+                                                name=op_geojson_filename,
+                                                folder=operation_folder,
+                                                owner=owner,
+                                                file_type='archive',
+                                                mime_type='application/geo+json',
+                                                is_public=True,
+                                                is_third_party=True,
+                                                third_party_source='johndeere',
+                                                third_party_id=f"{operation_id}_boundary_geojson",
+                                            )
+                                            op_geojson_file.file.save(op_geojson_filename, ContentFile(geojson_content.encode('utf-8')))
+                                            op_geojson_file.file_size = len(geojson_content)
+                                            op_geojson_file.save()
+                                            results['operation_files_created'] += 1
+                                            logger.info(f"Created operation GeoJSON: {op_geojson_filename}")
+                    except Exception as e:
+                        logger.warning(f"Failed to get boundary for operation {operation_id}: {e}")
+        
+        logger.info(f"John Deere sync completed: {results}")
+        return results
+        
+    except Exception as e:
+        logger.exception("Error in sync_johndeere_task")
+        results['success'] = False
+        results['errors'].append(str(e))
+        return results
+
+
+@shared_task
+def sync_johndeere_scheduled():
+    """
+    Wrapper task for scheduled John Deere sync.
+    This is called by Celery Beat on a daily schedule.
+    """
+    logger.info("Running scheduled John Deere sync...")
+    return sync_johndeere_task.delay()

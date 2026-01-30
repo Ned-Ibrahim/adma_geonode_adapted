@@ -148,11 +148,22 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'filemanager.tasks.sync_realm5_task',
         'schedule': crontab(hour=2, minute=0),  # Run at 2:00 AM daily
     },
+    'sync-johndeere-daily': {
+        'task': 'filemanager.tasks.sync_johndeere_task',
+        'schedule': crontab(hour=3, minute=0),  # Run at 3:00 AM daily
+    },
 }
 
 # Realm5 API Configuration
 # API key should be set via environment variable (loaded from .env file)
 REALM5_API_KEY = os.environ.get('REALM5_API_KEY')
+
+# John Deere API Configuration
+# Credentials should be set via environment variables
+JD_CLIENT_ID = os.environ.get('JD_CLIENT_ID')
+JD_CLIENT_SECRET = os.environ.get('JD_CLIENT_SECRET')
+JD_REFRESH_TOKEN = os.environ.get('JD_REFRESH_TOKEN')
+JD_ORG_ID = os.environ.get('JD_ORG_ID', '4193081')  # Default organization ID
 
 # File Upload Settings
 FILE_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024  # 500MB
