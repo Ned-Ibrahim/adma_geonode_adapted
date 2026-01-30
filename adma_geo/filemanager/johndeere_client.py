@@ -66,7 +66,7 @@ class JohnDeereClient:
             'refresh_token': self.refresh_token,
             'client_id': self.client_id,
             'client_secret': self.client_secret,
-            'scope': 'ag1 ag2 ag3 offline_access',  # Request necessary scopes
+            'scope': 'offline_access files ag3 work2 org2 eq2',  # Only request scopes that were granted originally
         }
         
         headers = {
@@ -425,71 +425,32 @@ class JohnDeereClient:
         """
         import tempfile
         import os
-        import zipfile
-        from io import BytesIO
         
         try:
-            import fiona
-            from fiona.crs import from_epsg
+            import geopandas as gpd
             
-            # Wrap single feature in FeatureCollection if needed
-            if geojson.get('type') == 'Feature':
-                features = [geojson]
-                geometry_type = geojson['geometry']['type']
-            elif geojson.get('type') == 'FeatureCollection':
-                features = geojson.get('features', [])
-                geometry_type = features[0]['geometry']['type'] if features else 'Polygon'
-            else:
-                logger.error(f"Unsupported GeoJSON type: {geojson.get('type')}")
+            # Create GeoDataFrame from GeoJSON
+            gdf = gpd.GeoDataFrame.from_features(
+                geojson if geojson.get('type') == 'FeatureCollection' else {'type': 'FeatureCollection', 'features': [geojson]},
+                crs='EPSG:4326'
+            )
+            
+            if gdf.empty:
+                logger.warning("GeoJSON resulted in empty GeoDataFrame")
                 return {}
             
-            if not features:
-                return {}
+            # Convert bool columns to string (shapefiles don't support bool)
+            for col in gdf.columns:
+                if col != 'geometry' and gdf[col].dtype == 'bool':
+                    gdf[col] = gdf[col].astype(str)
             
-            # Define schema based on properties
-            properties_schema = {}
-            if features[0].get('properties'):
-                for key, value in features[0]['properties'].items():
-                    if value is None:
-                        properties_schema[key] = 'str'
-                    elif isinstance(value, bool):
-                        properties_schema[key] = 'str'  # Shapefiles don't support bool
-                    elif isinstance(value, int):
-                        properties_schema[key] = 'int'
-                    elif isinstance(value, float):
-                        properties_schema[key] = 'float'
-                    else:
-                        properties_schema[key] = 'str'
-            
-            schema = {
-                'geometry': geometry_type,
-                'properties': properties_schema
-            }
+            # Truncate column names to 10 characters (shapefile limitation)
+            gdf.columns = [c if c == 'geometry' else c[:10] for c in gdf.columns]
             
             # Write to temp directory
             with tempfile.TemporaryDirectory() as tmpdir:
                 shp_path = os.path.join(tmpdir, f"{name}.shp")
-                
-                with fiona.open(
-                    shp_path,
-                    'w',
-                    driver='ESRI Shapefile',
-                    crs=from_epsg(4326),  # WGS84
-                    schema=schema
-                ) as output:
-                    for feature in features:
-                        # Convert bool to string for shapefile compatibility
-                        props = {}
-                        for key, value in (feature.get('properties') or {}).items():
-                            if isinstance(value, bool):
-                                props[key] = str(value)
-                            else:
-                                props[key] = value
-                        
-                        output.write({
-                            'geometry': feature['geometry'],
-                            'properties': props
-                        })
+                gdf.to_file(shp_path)
                 
                 # Collect all shapefile components
                 result = {}
@@ -503,8 +464,8 @@ class JohnDeereClient:
                 
                 return result
                 
-        except ImportError:
-            logger.error("fiona package not installed. Cannot convert GeoJSON to shapefile.")
+        except ImportError as e:
+            logger.error(f"geopandas package not available: {e}")
             return {}
         except Exception as e:
             logger.error(f"Error converting GeoJSON to shapefile: {e}")

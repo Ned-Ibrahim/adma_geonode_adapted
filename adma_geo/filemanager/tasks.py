@@ -5,6 +5,8 @@ from celery import shared_task
 from django.contrib.auth import get_user_model
 from .models import File, Folder
 from .gis_utils import process_gis_file, publish_to_geoserver, bundle_and_publish_shapefile
+from datetime import date
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1292,33 +1294,33 @@ def sync_johndeere_task(self):
             
             logger.info(f"Processing field: {field_id} ({field_name})")
             
-            # Check if folder exists for this field (using field ID as folder name)
+            # Check if folder exists for this field (using field NAME as folder name)
             field_folder = Folder.objects.filter(
-                name=field_id,
+                name=field_name,
                 parent=johndeere_folder,
                 owner=owner
             ).first()
             
             field_is_new = False
             if not field_folder:
-                # Create new folder for this field
+                # Create new folder for this field using the field's name
                 field_folder = Folder.objects.create(
-                    name=field_id,
+                    name=field_name,
                     parent=johndeere_folder,
                     owner=owner,
                     is_public=True,
                     is_third_party=True,
                     third_party_source='johndeere',
-                    third_party_id=field_id,
+                    third_party_id=field_id,  # Still use ID for tracking
                 )
                 results['field_folders_created'] += 1
                 field_is_new = True
-                logger.info(f"Created folder for field: {field_id}")
+                logger.info(f"Created folder for field: {field_name} (ID: {field_id})")
             
             # Only create metadata and boundary files if folder is new
             if field_is_new:
-                # Save field metadata as JSON
-                metadata_filename = f"{field_id}_metadata.json"
+                # Save field metadata as JSON - use field_name for filename
+                metadata_filename = f"{field_name}_metadata.json"
                 field_metadata = {
                     'id': field_id,
                     'name': field_name,
@@ -1362,12 +1364,13 @@ def sync_johndeere_task(self):
                 
                 for boundary in boundaries:
                     boundary_id = boundary.get('id', 'boundary')
-                    boundary_name = boundary.get('name', boundary_id)
-                    shapefile_folder_name = f"{field_id}_{boundary_id}_boundary"
+                    # Use field_name for boundary folder and file naming
+                    boundary_folder_name = f"{field_name}_boundary"
+                    boundary_file_basename = f"{field_name}_boundary"
                     
                     # Check if shapefile folder already exists
                     boundary_folder = Folder.objects.filter(
-                        name=shapefile_folder_name,
+                        name=boundary_folder_name,
                         parent=field_folder,
                         owner=owner
                     ).first()
@@ -1381,11 +1384,11 @@ def sync_johndeere_task(self):
                         logger.warning(f"Could not convert boundary {boundary_id} to GeoJSON")
                         continue
                     
-                    # Convert GeoJSON to shapefile
-                    shp_components = client.geojson_to_shapefile_components(geojson, shapefile_folder_name)
+                    # Convert GeoJSON to shapefile - use field_name based naming
+                    shp_components = client.geojson_to_shapefile_components(geojson, boundary_file_basename)
                     if not shp_components:
                         # Save as GeoJSON instead (as a single file in the field folder)
-                        geojson_filename = f"{shapefile_folder_name}.geojson"
+                        geojson_filename = f"{boundary_folder_name}.geojson"
                         if not File.objects.filter(name=geojson_filename, folder=field_folder, owner=owner).exists():
                             geojson_content = json.dumps(geojson, indent=2)
                             geojson_file = File(
@@ -1406,9 +1409,9 @@ def sync_johndeere_task(self):
                             logger.info(f"Created GeoJSON file: {geojson_filename}")
                         continue
                     
-                    # Create a folder for the shapefile components
+                    # Create a folder for the shapefile components - use field_name based naming
                     boundary_folder = Folder.objects.create(
-                        name=shapefile_folder_name,
+                        name=boundary_folder_name,
                         parent=field_folder,
                         owner=owner,
                         is_public=True,
@@ -1417,7 +1420,7 @@ def sync_johndeere_task(self):
                         third_party_id=f"{field_id}_{boundary_id}_shp_folder",
                     )
                     results['field_folders_created'] += 1
-                    logger.info(f"Created shapefile folder: {shapefile_folder_name}")
+                    logger.info(f"Created shapefile folder: {boundary_folder_name}")
                     
                     # Save each shapefile component as individual files
                     for filename, content in shp_components.items():
@@ -1447,8 +1450,13 @@ def sync_johndeere_task(self):
                         shp_component_file.file_size = len(content)
                         shp_component_file.save()
                         results['field_files_created'] += 1
+                        
+                        # Trigger GIS processing for .shp files
+                        if filename.endswith('.shp'):
+                            process_gis_file_task.delay(str(shp_component_file.id))
+                            logger.info(f"Triggered GIS processing for: {filename}")
                     
-                    logger.info(f"Created {len(shp_components)} shapefile components in folder: {shapefile_folder_name}")
+                    logger.info(f"Created {len(shp_components)} shapefile components in folder: {boundary_folder_name}")
             
             # Step 3: Get field operations for this field
             try:
@@ -1459,6 +1467,26 @@ def sync_johndeere_task(self):
                 logger.warning(f"Failed to fetch operations for field {field_id}: {e}")
                 operations = []
             
+            # Create or get the "field_operations" folder under the field folder
+            field_operations_folder = Folder.objects.filter(
+                name="field_operations",
+                parent=field_folder,
+                owner=owner
+            ).first()
+            
+            if not field_operations_folder and operations:
+                field_operations_folder = Folder.objects.create(
+                    name="field_operations",
+                    parent=field_folder,
+                    owner=owner,
+                    is_public=True,
+                    is_third_party=True,
+                    third_party_source='johndeere',
+                    third_party_id=f"{field_id}_field_operations",
+                )
+                results['field_folders_created'] += 1
+                logger.info(f"Created field_operations folder for field: {field_name}")
+            
             # Process each field operation
             for operation in operations:
                 operation_id = operation.get('id')
@@ -1467,19 +1495,19 @@ def sync_johndeere_task(self):
                 if not operation_id:
                     continue
                 
-                # Check if folder exists for this operation
+                # Check if folder exists for this operation (now under field_operations folder)
                 operation_folder = Folder.objects.filter(
                     name=operation_id,
-                    parent=field_folder,
+                    parent=field_operations_folder,
                     owner=owner
                 ).first()
                 
                 operation_is_new = False
                 if not operation_folder:
-                    # Create new folder for this operation
+                    # Create new folder for this operation under field_operations
                     operation_folder = Folder.objects.create(
                         name=operation_id,
-                        parent=field_folder,
+                        parent=field_operations_folder,
                         owner=owner,
                         is_public=True,
                         is_third_party=True,
@@ -1595,6 +1623,11 @@ def sync_johndeere_task(self):
                                             op_shp_component_file.file_size = len(content)
                                             op_shp_component_file.save()
                                             results['operation_files_created'] += 1
+                                            
+                                            # Trigger GIS processing for .shp files
+                                            if filename.endswith('.shp'):
+                                                process_gis_file_task.delay(str(op_shp_component_file.id))
+                                                logger.info(f"Triggered GIS processing for: {filename}")
                                         
                                         logger.info(f"Created {len(op_shp_components)} shapefile components in folder: {op_shp_folder_name}")
                                     else:
