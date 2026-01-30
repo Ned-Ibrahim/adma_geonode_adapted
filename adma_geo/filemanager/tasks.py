@@ -426,7 +426,6 @@ def run_seeding_tool_task(self, file_id, output_dir_id=None):
             # Use specified output folder
             try:
                 output_folder_obj = Folder.objects.get(id=output_dir_id)
-                output_dir = output_folder_obj.get_full_path()
             except Folder.DoesNotExist:
                 logger.error(f"Output folder with ID {output_dir_id} not found")
                 return {"success": False, "error": f"Output folder with ID {output_dir_id} not found"}
@@ -454,8 +453,12 @@ def run_seeding_tool_task(self, file_id, output_dir_id=None):
                     is_public=file_obj.is_public  # Inherit visibility from source file
                 )
                 logger.info(f"Created new 'seeding_tool_output' folder: {output_folder_obj.id}")
-            
-            output_dir = output_folder_obj.get_full_path()
+        
+        # Build the full output directory path under MEDIA_ROOT/uploads
+        # output_folder_obj.get_full_path() returns relative path like "All the Strips/.../seeding_tool_output"
+        # Files must be under MEDIA_ROOT/uploads/ for Django FileField to find them
+        relative_output_dir = output_folder_obj.get_full_path()
+        output_dir = os.path.join(settings.MEDIA_ROOT, 'uploads', relative_output_dir)
         
         # Ensure output directory exists on filesystem
         os.makedirs(output_dir, exist_ok=True)
@@ -628,7 +631,6 @@ def run_shape_to_json_task(self, file_id, output_dir_id=None):
             # Use specified output folder
             try:
                 output_folder_obj = Folder.objects.get(id=output_dir_id)
-                output_dir = output_folder_obj.get_full_path()
             except Folder.DoesNotExist:
                 logger.error(f"Output folder with ID {output_dir_id} not found")
                 return {"success": False, "error": f"Output folder with ID {output_dir_id} not found"}
@@ -655,8 +657,10 @@ def run_shape_to_json_task(self, file_id, output_dir_id=None):
                     is_public=file_obj.is_public
                 )
                 logger.info(f"Created new 'geojson_output' folder: {output_folder_obj.id}")
-            
-            output_dir = output_folder_obj.get_full_path()
+        
+        # Build the full output directory path under MEDIA_ROOT/uploads
+        relative_output_dir = output_folder_obj.get_full_path()
+        output_dir = os.path.join(settings.MEDIA_ROOT, 'uploads', relative_output_dir)
         
         # Ensure output directory exists on filesystem
         os.makedirs(output_dir, exist_ok=True)
@@ -829,7 +833,6 @@ def run_si_tool_task(
         if output_dir_id:
             try:
                 output_folder_obj = Folder.objects.get(id=output_dir_id)
-                output_dir = output_folder_obj.get_full_path()
             except Folder.DoesNotExist:
                 return {"success": False, "error": "Output folder not found"}
         else:
@@ -851,8 +854,10 @@ def run_si_tool_task(
                     owner=buffer_file.owner,
                     is_public=buffer_file.is_public
                 )
-            
-            output_dir = output_folder_obj.get_full_path()
+        
+        # Build the full output directory path under MEDIA_ROOT/uploads
+        relative_output_dir = output_folder_obj.get_full_path()
+        output_dir = os.path.join(settings.MEDIA_ROOT, 'uploads', relative_output_dir)
         
         os.makedirs(output_dir, exist_ok=True)
         

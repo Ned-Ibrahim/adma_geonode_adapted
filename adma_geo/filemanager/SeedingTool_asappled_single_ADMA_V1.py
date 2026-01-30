@@ -139,7 +139,7 @@ def process_seeding_tool(input_path: str, output_dir: str) -> Tuple[bool, str, D
         boundary.to_file(boundary_path)
 
         # Collect all shapefile component paths
-        shapefile_extensions = ['.shx', '.dbf', '.prj', '.cpg']
+        shapefile_extensions = ['.shp','.shx', '.dbf', '.prj', '.cpg']
         
         # Polygons shapefile components
         output_files['polygons'] = polys_path
