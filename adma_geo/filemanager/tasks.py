@@ -981,7 +981,7 @@ def sync_realm5_task(self):
     
     # Configuration
     REALM5_API_KEY = getattr(settings, 'REALM5_API_KEY', 'U7nEMFir1hMKTucbRsqeC2joTYGXpJy2')
-    SYNC_START_DATE = date(2026, 1, 1)  # Start syncing from this date
+    SYNC_START_DATE = date(2024, 1, 1)  # Start syncing from this date
     
     results = {
         'success': True,
