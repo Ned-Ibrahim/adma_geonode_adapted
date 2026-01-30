@@ -184,6 +184,9 @@
                     <a class="nav-link" href="#user-management">User Management</a>
                     <a class="nav-link" href="#public-sharing">Public Sharing</a>
                     <a class="nav-link" href="#search-filter">Search & Filter</a>
+                    <a class="nav-link" href="#third-party-integration">Third-Party Integration</a>
+                    <a class="nav-link" href="#analysis-tools">Analysis Tools</a>
+                    <a class="nav-link" href="#custom-maps">Custom Maps</a>
                     <a class="nav-link" href="#api-endpoints">API Endpoints</a>
                     <a class="nav-link" href="#api-documentation">API Documentation</a>
                     <a class="nav-link" href="#system-architecture">System Architecture</a>
@@ -230,6 +233,36 @@
                     </div>
                 </div>
 
+                <div class="row mt-3">
+                    <div class="col-md-4">
+                        <div class="feature-card text-center">
+                            <div class="feature-icon">
+                                <i class="fas fa-plug text-success"></i>
+                            </div>
+                            <h5>Third-Party Integration</h5>
+                            <p>Automatic sync with John Deere Operations Center and Realm5 weather stations for comprehensive farm data.</p>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="feature-card text-center">
+                            <div class="feature-icon">
+                                <i class="fas fa-flask text-warning"></i>
+                            </div>
+                            <h5>Analysis Tools</h5>
+                            <p>Specialized agricultural analysis tools including seeding analysis, format conversion, and spectral indices.</p>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="feature-card text-center">
+                            <div class="feature-icon">
+                                <i class="fas fa-layer-group text-info"></i>
+                            </div>
+                            <h5>Custom Maps</h5>
+                            <p>Create multi-layer maps by combining GIS files for comprehensive spatial visualization and analysis.</p>
+                        </div>
+                    </div>
+                </div>
+
                 <h3>Key Features</h3>
                 <div class="mb-3">
                     <span class="badge-feature">Cloud File Storage</span>
@@ -243,6 +276,10 @@
                     <span class="badge-feature">ZIP Download</span>
                     <span class="badge-feature">Bulk Upload</span>
                     <span class="badge-feature">API Authentication</span>
+                    <span class="badge-feature">John Deere Integration</span>
+                    <span class="badge-feature">Realm5 Weather Data</span>
+                    <span class="badge-feature">Agricultural Analysis Tools</span>
+                    <span class="badge-feature">Custom Map Creation</span>
                 </div>
             </section>
 
@@ -829,6 +866,283 @@ Duplicate 3: document_3.pdf
                     <li>Search by filename or content</li>
                     <li>Filter by coordinate system</li>
                 </ul>
+            </section>
+
+            <section id="third-party-integration">
+                <h2><i class="fas fa-plug me-2"></i>Third-Party Integration</h2>
+
+                <p>ADMA integrates with external agricultural data platforms to automatically sync field data, boundaries, and sensor observations.</p>
+
+                <h3>John Deere Operations Center</h3>
+                <div class="feature-card">
+                    <h5><i class="fas fa-tractor me-2 text-success"></i>John Deere Integration</h5>
+                    <p>ADMA connects to John Deere Operations Center API to automatically sync field data, boundaries, and field operations.</p>
+                </div>
+
+                <h4>Data Synced from John Deere</h4>
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5>Field Data</h5>
+                        <ul>
+                            <li><strong>Field Metadata:</strong> Field name, ID, and properties saved as JSON</li>
+                            <li><strong>Field Boundaries:</strong> Geographic boundaries saved as shapefiles (.shp, .shx, .dbf, .prj, .cpg)</li>
+                            <li><strong>Automatic GIS Processing:</strong> Boundaries are automatically published to GeoServer for visualization</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h5>Field Operations</h5>
+                        <ul>
+                            <li><strong>Operation Metadata:</strong> Operation type, dates, and details saved as JSON</li>
+                            <li><strong>Operation Boundaries:</strong> Coverage areas saved as shapefiles</li>
+                            <li><strong>Operation Types:</strong> Planting, harvesting, tillage, application operations</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h4>Folder Structure</h4>
+                <p>John Deere data is organized in a structured folder hierarchy:</p>
+                <div class="code-block">
+📁 Third Party/
+  └── 📁 John Deere/
+      └── 📁 {Field Name}/
+          ├── 📄 {Field Name}_metadata.json
+          ├── 📁 {Field Name}_boundary/
+          │   ├── 📄 {Field Name}_boundary.shp
+          │   ├── 📄 {Field Name}_boundary.shx
+          │   ├── 📄 {Field Name}_boundary.dbf
+          │   ├── 📄 {Field Name}_boundary.prj
+          │   └── 📄 {Field Name}_boundary.cpg
+          └── 📁 field_operations/
+              └── 📁 {Operation Type}_{Date}/
+                  ├── 📄 operation_metadata.json
+                  └── 📁 {Operation}_boundary/
+                      └── 📄 {Operation}_boundary.shp (+ components)
+                </div>
+
+                <h4>Sync Schedule</h4>
+                <p>John Deere data sync runs automatically on a daily schedule via Celery Beat. The sync is incremental - only new fields and operations are added.</p>
+
+                <h3>Realm5 Weather Stations</h3>
+                <div class="feature-card">
+                    <h5><i class="fas fa-cloud-sun me-2 text-info"></i>Realm5 Integration</h5>
+                    <p>ADMA connects to Realm5 API to sync weather station data and daily observations for agricultural monitoring.</p>
+                </div>
+
+                <h4>Data Synced from Realm5</h4>
+                <ul>
+                    <li><strong>Device Information:</strong> Weather station metadata and configuration</li>
+                    <li><strong>Daily Observations:</strong> Weather data saved as JSON files (one per day)</li>
+                    <li><strong>Historical Data:</strong> Syncs observations starting from January 1, 2024</li>
+                    <li><strong>Sensor Readings:</strong> Temperature, humidity, precipitation, wind, and other environmental data</li>
+                </ul>
+
+                <h4>Folder Structure</h4>
+                <div class="code-block">
+📁 Third Party/
+  └── 📁 Realm5/
+      └── 📁 {Device Serial Number}/
+          ├── 📄 device_info.json
+          └── 📁 observations/
+              ├── 📄 2024-01-01.json
+              ├── 📄 2024-01-02.json
+              └── 📄 ... (daily observation files)
+                </div>
+
+                <h4>Sync Schedule</h4>
+                <p>Realm5 data syncs daily via Celery Beat. The sync fetches all historical data from January 1, 2024 onwards and continues to add new daily observations.</p>
+
+                <div class="alert alert-tip">
+                    <i class="fas fa-lightbulb me-2"></i>
+                    <strong>Note:</strong> Third-party sync tasks are configured by administrators. The sync respects API rate limits and may take several minutes to complete for large data sets.
+                </div>
+            </section>
+
+            <section id="analysis-tools">
+                <h2><i class="fas fa-flask me-2"></i>Analysis Tools</h2>
+
+                <p>ADMA provides specialized agricultural analysis tools for processing GIS data and generating insights.</p>
+
+                <h3>Seeding Tool</h3>
+                <div class="feature-card">
+                    <h5><i class="fas fa-seedling me-2 text-success"></i>Seeding Analysis Tool</h5>
+                    <p>Processes as-applied seeding data to generate polygon maps and summary statistics.</p>
+                </div>
+
+                <h4>Features</h4>
+                <ul>
+                    <li><strong>Polygon Generation:</strong> Creates polygon shapefiles from seeding point data</li>
+                    <li><strong>Boundary Extraction:</strong> Generates field boundary shapefiles</li>
+                    <li><strong>Summary Statistics:</strong> Produces CSV summary reports with key metrics</li>
+                    <li><strong>Background Processing:</strong> Runs asynchronously via Celery for large datasets</li>
+                </ul>
+
+                <h4>Output Files</h4>
+                <div class="table-responsive">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Output</th>
+                                <th>Format</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Polygons</td>
+                                <td>Shapefile (.shp + components)</td>
+                                <td>Polygon representation of seeding data</td>
+                            </tr>
+                            <tr>
+                                <td>Boundary</td>
+                                <td>Shapefile (.shp + components)</td>
+                                <td>Field boundary extracted from data</td>
+                            </tr>
+                            <tr>
+                                <td>Summary</td>
+                                <td>CSV</td>
+                                <td>Statistical summary and metrics</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>How to Use</h4>
+                <div class="workflow-step">
+                    <span class="step-number">1</span>
+                    Navigate to a compatible GIS file (shapefile with seeding data)
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">2</span>
+                    Click the "Seeding Tool" button in the file actions panel
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">3</span>
+                    Select the output folder for generated files
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">4</span>
+                    The tool runs in the background and generates output files automatically
+                </div>
+
+                <h3>Shape to JSON Converter</h3>
+                <div class="feature-card">
+                    <h5><i class="fas fa-exchange-alt me-2 text-primary"></i>Shapefile to GeoJSON Conversion</h5>
+                    <p>Converts ESRI Shapefile format to GeoJSON for web-friendly data interchange.</p>
+                </div>
+
+                <h4>Features</h4>
+                <ul>
+                    <li><strong>Format Conversion:</strong> Transforms .shp files to .geojson</li>
+                    <li><strong>Attribute Preservation:</strong> Maintains all feature attributes</li>
+                    <li><strong>Coordinate Systems:</strong> Handles coordinate transformations</li>
+                    <li><strong>Web Compatible:</strong> Output is directly usable in web mapping applications</li>
+                </ul>
+
+                <h3>SI Tool (Spectral Index Tool)</h3>
+                <div class="feature-card">
+                    <h5><i class="fas fa-chart-line me-2 text-warning"></i>Spectral Index Analysis</h5>
+                    <p>Calculates spectral indices from multispectral imagery for crop health monitoring.</p>
+                </div>
+
+                <h4>Features</h4>
+                <ul>
+                    <li><strong>Index Calculation:</strong> Computes vegetation indices (NDVI, etc.)</li>
+                    <li><strong>Raster Processing:</strong> Handles GeoTIFF input files</li>
+                    <li><strong>Output Generation:</strong> Creates indexed raster outputs</li>
+                </ul>
+
+                <div class="alert alert-tip">
+                    <i class="fas fa-lightbulb me-2"></i>
+                    <strong>Tip:</strong> Analysis tools require user authentication. The "Run Tool" buttons appear on compatible file detail pages.
+                </div>
+            </section>
+
+            <section id="custom-maps">
+                <h2><i class="fas fa-layer-group me-2"></i>Custom Maps</h2>
+
+                <p>ADMA allows you to create custom maps by combining multiple GIS layers into a single interactive visualization.</p>
+
+                <h3>Creating Custom Maps</h3>
+                <div class="feature-card">
+                    <h5><i class="fas fa-map me-2 text-danger"></i>Multi-Layer Map Creation</h5>
+                    <p>Combine multiple published GIS files into a single map view for comprehensive data visualization.</p>
+                </div>
+
+                <h4>How to Create a Map</h4>
+                <div class="workflow-step">
+                    <span class="step-number">1</span>
+                    <strong>Navigate to Create Map:</strong> Click "Create Map" in the navigation menu
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">2</span>
+                    <strong>Enter Map Name:</strong> Provide a descriptive name for your map
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">3</span>
+                    <strong>Select Layers:</strong> Browse your folders and select published GIS files to include
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">4</span>
+                    <strong>Create Map:</strong> Click the "Create Map" button to generate the map
+                </div>
+                <div class="workflow-step">
+                    <span class="step-number">5</span>
+                    <strong>View Map:</strong> The system redirects to the interactive map viewer
+                </div>
+
+                <h4>Layer Selection</h4>
+                <ul>
+                    <li><strong>Folder Navigation:</strong> Browse through your folder hierarchy to find layers</li>
+                    <li><strong>Published Files Only:</strong> Only GIS files with "Published" status can be added as layers</li>
+                    <li><strong>Multiple Selection:</strong> Select multiple files by clicking the checkboxes</li>
+                    <li><strong>Layer Count:</strong> The interface shows how many layers are currently selected</li>
+                </ul>
+
+                <h4>Supported Layer Types</h4>
+                <div class="table-responsive">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Layer Type</th>
+                                <th>File Formats</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Vector Layers</td>
+                                <td>.shp, .geojson, .gpkg, .kml</td>
+                                <td>Points, lines, and polygon features</td>
+                            </tr>
+                            <tr>
+                                <td>Raster Layers</td>
+                                <td>.tif, .tiff (GeoTIFF)</td>
+                                <td>Satellite imagery, DEMs, analysis outputs</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Map Features</h4>
+                <ul>
+                    <li><strong>Layer Toggle:</strong> Show/hide individual layers on the map</li>
+                    <li><strong>Layer Ordering:</strong> Layers are displayed in the order they were added</li>
+                    <li><strong>Auto Extent:</strong> Map automatically zooms to fit all layer bounds</li>
+                    <li><strong>Base Maps:</strong> Multiple base map options (OpenStreetMap, satellite, etc.)</li>
+                </ul>
+
+                <h3>Managing Maps</h3>
+                <p>Your created maps are accessible from the Maps section:</p>
+                <ul>
+                    <li><strong>View Maps:</strong> Open any saved map in the interactive viewer</li>
+                    <li><strong>Map List:</strong> Browse all your created maps</li>
+                    <li><strong>Public Maps:</strong> Maps can be made public for sharing</li>
+                </ul>
+
+                <div class="alert alert-tip">
+                    <i class="fas fa-lightbulb me-2"></i>
+                    <strong>Tip:</strong> When creating a map, a confirmation message appears showing the map name and layer count. The map is created in the background and you'll be redirected to view it once ready.
+                </div>
             </section>
 
             <section id="api-endpoints">
