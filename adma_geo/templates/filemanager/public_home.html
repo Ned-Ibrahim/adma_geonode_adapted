@@ -403,8 +403,176 @@
 </div>
 {% endif %}
 
+<!-- Third-Party Data Section -->
+{% if third_party_folders or third_party_files %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
+                <div class="d-flex align-items-center mb-2 mb-md-0">
+                    <h4 class="mb-0 me-3">
+                        <i class="fas fa-cloud-download-alt me-2"></i>Third-Party Data
+                    </h4>
+                    <span class="badge bg-secondary">{{ stats.total_third_party_folders }} folders, {{ stats.total_third_party_files }} files</span>
+                </div>
+                
+                <!-- View Toggle -->
+                <div class="btn-group" role="group" aria-label="Third-party view toggle">
+                    <button type="button" class="btn btn-outline-secondary active" onclick="toggleThirdPartyView('list')" id="thirdPartyListViewBtn">
+                        <i class="fas fa-list me-1"></i>List
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="toggleThirdPartyView('panel')" id="thirdPartyPanelViewBtn">
+                        <i class="fas fa-th me-1"></i>Panels
+                    </button>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                <!-- List View -->
+                <div id="thirdPartyListView" class="view-container">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Source</th>
+                                    <th>Owner</th>
+                                    <th>Created</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Folders first -->
+                                {% for folder in third_party_folders %}
+                                <tr>
+                                    <td>
+                                        <a href="{% url 'filemanager:public_folder_detail' folder.id %}" class="text-decoration-none d-flex align-items-center">
+                                            <i class="fas fa-folder folder-icon"></i>
+                                            <div>
+                                                <div class="fw-bold">{{ folder.name }}</div>
+                                            </div>
+                                        </a>
+                                    </td>
+                                    <td><span class="badge bg-primary">Folder</span></td>
+                                    <td>
+                                        <span class="badge bg-info">
+                                            {% if folder.third_party_source == 'realm5' %}
+                                            <i class="fas fa-cloud me-1"></i>Realm5
+                                            {% elif folder.third_party_source == 'johndeere' %}
+                                            <i class="fas fa-tractor me-1"></i>John Deere
+                                            {% else %}
+                                            {{ folder.third_party_source|title }}
+                                            {% endif %}
+                                        </span>
+                                    </td>
+                                    <td><small>{{ folder.owner.username }}</small></td>
+                                    <td><small>{{ folder.created_at|date:"M d, Y" }}</small></td>
+                                </tr>
+                                {% endfor %}
+                                
+                                <!-- Files second -->
+                                {% for file in third_party_files %}
+                                <tr>
+                                    <td>
+                                        <a href="{% url 'filemanager:public_file_detail' file.id %}" class="text-decoration-none d-flex align-items-center">
+                                            <i class="{{ file.get_icon_class }} file-icon"></i>
+                                            <div>
+                                                <div class="fw-bold">{{ file.name }}</div>
+                                            </div>
+                                        </a>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-secondary">{{ file.file_type|title }}</span>
+                                        {% if file.is_spatial %}
+                                            <span class="badge bg-info ms-1">GIS</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-info">
+                                            {% if file.third_party_source == 'realm5' %}
+                                            <i class="fas fa-cloud me-1"></i>Realm5
+                                            {% elif file.third_party_source == 'johndeere' %}
+                                            <i class="fas fa-tractor me-1"></i>John Deere
+                                            {% else %}
+                                            {{ file.third_party_source|title }}
+                                            {% endif %}
+                                        </span>
+                                    </td>
+                                    <td><small>{{ file.owner.username }}</small></td>
+                                    <td><small>{{ file.created_at|date:"M d, Y" }}</small></td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- Panel View -->
+                <div id="thirdPartyPanelView" class="view-container" style="display: none;">
+                    <div class="row">
+                        <!-- Folders first -->
+                        {% for folder in third_party_folders %}
+                        <div class="col-md-4 col-sm-6 mb-3">
+                            <a href="{% url 'filemanager:public_folder_detail' folder.id %}" class="text-decoration-none">
+                                <div class="folder-item">
+                                    <i class="fas fa-folder folder-icon"></i>
+                                    <div class="flex-grow-1">
+                                        <h6 class="mb-1 fw-bold">{{ folder.name|truncatechars:25 }}</h6>
+                                        <small class="text-muted">
+                                            {% if folder.third_party_source == 'realm5' %}
+                                            <i class="fas fa-cloud me-1"></i>Realm5
+                                            {% elif folder.third_party_source == 'johndeere' %}
+                                            <i class="fas fa-tractor me-1"></i>John Deere
+                                            {% else %}
+                                            {{ folder.third_party_source|title }}
+                                            {% endif %}
+                                        </small>
+                                        <br>
+                                        <small class="text-muted">
+                                            {{ folder.file_count }} files • {{ folder.subfolder_count }} folders
+                                        </small>
+                                    </div>
+                                </div>
+                            </a>
+                        </div>
+                        {% endfor %}
+                        
+                        <!-- Files second -->
+                        {% for file in third_party_files %}
+                        <div class="col-md-4 col-sm-6 mb-3">
+                            <a href="{% url 'filemanager:public_file_detail' file.id %}" class="text-decoration-none">
+                                <div class="file-item">
+                                    <i class="{{ file.get_icon_class }} file-icon"></i>
+                                    <div class="flex-grow-1">
+                                        <h6 class="mb-1 fw-bold">{{ file.name|truncatechars:25 }}</h6>
+                                        <small class="text-muted">
+                                            {% if file.third_party_source == 'realm5' %}
+                                            <i class="fas fa-cloud me-1"></i>Realm5
+                                            {% elif file.third_party_source == 'johndeere' %}
+                                            <i class="fas fa-tractor me-1"></i>John Deere
+                                            {% else %}
+                                            {{ file.third_party_source|title }}
+                                            {% endif %}
+                                        </small>
+                                        <br>
+                                        <small class="text-muted">
+                                            {{ file.get_size_display }}
+                                        </small>
+                                    </div>
+                                </div>
+                            </a>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- No Public Content -->
-{% if not public_folders and not public_files and not public_maps %}
+{% if not public_folders and not public_files and not public_maps and not third_party_folders and not third_party_files %}
 <div class="row">
     <div class="col-12">
         <div class="text-center py-5">
@@ -425,12 +593,14 @@
 
 {% block extra_js %}
 <script>
-// View toggle functionality
+// View toggle functionality for Public Data
 function toggleView(viewType) {
     const listView = document.getElementById('listView');
     const panelView = document.getElementById('panelView');
     const listBtn = document.getElementById('listViewBtn');
     const panelBtn = document.getElementById('panelViewBtn');
+    
+    if (!listView || !panelView) return;
     
     if (viewType === 'list') {
         listView.style.display = 'block';
@@ -447,10 +617,39 @@ function toggleView(viewType) {
     }
 }
 
-// Load saved view preference on page load
+// View toggle functionality for Third-Party Data
+function toggleThirdPartyView(viewType) {
+    const listView = document.getElementById('thirdPartyListView');
+    const panelView = document.getElementById('thirdPartyPanelView');
+    const listBtn = document.getElementById('thirdPartyListViewBtn');
+    const panelBtn = document.getElementById('thirdPartyPanelViewBtn');
+    
+    if (!listView || !panelView) return;
+    
+    if (viewType === 'list') {
+        listView.style.display = 'block';
+        panelView.style.display = 'none';
+        listBtn.classList.add('active');
+        panelBtn.classList.remove('active');
+        localStorage.setItem('homeThirdPartyViewMode', 'list');
+    } else {
+        listView.style.display = 'none';
+        panelView.style.display = 'block';
+        listBtn.classList.remove('active');
+        panelBtn.classList.add('active');
+        localStorage.setItem('homeThirdPartyViewMode', 'panel');
+    }
+}
+
+// Load saved view preferences on page load
 document.addEventListener('DOMContentLoaded', function() {
+    // Public data view preference
     const savedView = localStorage.getItem('homeViewMode') || 'list';
     toggleView(savedView);
+    
+    // Third-party data view preference
+    const savedThirdPartyView = localStorage.getItem('homeThirdPartyViewMode') || 'list';
+    toggleThirdPartyView(savedThirdPartyView);
 });
 </script>
 {% endblock %}

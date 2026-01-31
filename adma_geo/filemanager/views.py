@@ -145,9 +145,11 @@ class HomeView(TemplateView):
         # Get top-level public folders - folders that are public and either:
         # 1. Have no parent (truly top-level), OR
         # 2. Have a private parent (making them the highest public level)
+        # EXCLUDE third-party folders (they go in a separate panel)
         public_folders_queryset = Folder.objects.filter(
             is_public=True,
-            deletion_in_progress=False
+            deletion_in_progress=False,
+            is_third_party=False  # Exclude third-party folders
         ).filter(
             Q(parent=None) |  # No parent (truly top-level)
             Q(parent__is_public=False)  # Parent is private (so this is top public level)
@@ -161,12 +163,31 @@ class HomeView(TemplateView):
         # Get top-level public files - files that are public and either:
         # 1. Have no folder (orphaned files), OR  
         # 2. Have a private folder (making them the highest public level)
+        # EXCLUDE third-party files (they go in a separate panel)
         public_files_queryset = File.objects.filter(
             is_public=True,
-            deletion_in_progress=False
+            deletion_in_progress=False,
+            is_third_party=False  # Exclude third-party files
         ).filter(
             Q(folder=None) |  # No folder (orphaned)
             Q(folder__is_public=False)  # Folder is private (so this file is top public level)
+        ).order_by('-created_at')
+        
+        # Get third-party folders (top-level only, visible to all)
+        third_party_folders = Folder.objects.filter(
+            is_public=True,
+            deletion_in_progress=False,
+            is_third_party=True,
+            parent=None  # Only top-level third-party folders
+        ).order_by('name')
+        
+        # Get third-party files (orphaned or with private parent)
+        third_party_files = File.objects.filter(
+            is_public=True,
+            deletion_in_progress=False,
+            is_third_party=True
+        ).filter(
+            Q(folder=None) | Q(folder__is_public=False)
         ).order_by('-created_at')
         
         # Get public maps - separate panel, no pagination mixing
@@ -183,6 +204,8 @@ class HomeView(TemplateView):
         total_folders = public_folders_queryset.count()
         total_files = public_files_queryset.count()
         total_maps = public_maps.count()
+        total_third_party_folders = third_party_folders.count()
+        total_third_party_files = third_party_files.count()
         total_items = total_folders + total_files
         
         # Set up pagination
@@ -222,6 +245,8 @@ class HomeView(TemplateView):
         context['public_folders'] = public_folders
         context['public_files'] = public_files
         context['public_maps'] = public_maps  # All maps, separate panel
+        context['third_party_folders'] = third_party_folders
+        context['third_party_files'] = third_party_files
         context['page_obj'] = page_obj
         context['total_items'] = total_items
         
@@ -230,6 +255,8 @@ class HomeView(TemplateView):
             'total_public_files': total_files,
             'total_public_folders': total_folders,
             'total_public_maps': total_maps,
+            'total_third_party_folders': total_third_party_folders,
+            'total_third_party_files': total_third_party_files,
         }
         
         return context
