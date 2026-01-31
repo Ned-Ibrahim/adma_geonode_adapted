@@ -525,6 +525,11 @@ def file_detail(request, file_id):
     realm5_variables = None
     is_realm5_observation = False
     
+    # Check if this is a Realm5 all.json aggregated file
+    realm5_all_data = None
+    realm5_all_variables = None
+    is_realm5_all = False
+    
     if (file_obj.is_third_party and 
         file_obj.third_party_source == 'realm5' and 
         file_obj.name.endswith('.json') and
@@ -533,8 +538,31 @@ def file_detail(request, file_id):
             with file_obj.file.open('r') as f:
                 observation_json = json.load(f)
                 
-            # Check if it has the expected structure
-            if 'observations' in observation_json and isinstance(observation_json['observations'], list):
+            # Check if it's an all.json file (has daily_averages)
+            if 'daily_averages' in observation_json and isinstance(observation_json['daily_averages'], list):
+                daily_averages = observation_json['daily_averages']
+                if daily_averages:
+                    # Extract available variables from the first daily average
+                    first_avg = daily_averages[0]
+                    # Get all numeric variables (exclude 'date' and 'observation_count')
+                    realm5_all_variables = [key for key in first_avg.keys() 
+                                           if key not in ('date', 'observation_count') 
+                                           and isinstance(first_avg.get(key), (int, float))]
+                    
+                    # Prepare data for visualization
+                    realm5_all_data = {
+                        'device_name': observation_json.get('device_name'),
+                        'dev_eui': observation_json.get('dev_eui'),
+                        'device_type': observation_json.get('device_type'),
+                        'total_days': observation_json.get('total_days', len(daily_averages)),
+                        'date_range': observation_json.get('date_range', {}),
+                        'daily_averages': daily_averages,
+                        'variables': realm5_all_variables,
+                    }
+                    is_realm5_all = True
+            
+            # Check if it's a daily observation file (has observations)
+            elif 'observations' in observation_json and isinstance(observation_json['observations'], list):
                 observations = observation_json['observations']
                 if observations:
                     # Extract available variables from the first observation
@@ -556,6 +584,7 @@ def file_detail(request, file_id):
         except Exception as e:
             print(f"Error parsing Realm5 observation JSON: {e}")
             realm5_observation_data = None
+            realm5_all_data = None
     
     return render(request, 'filemanager/file_detail.html', {
         'file': file_obj,
@@ -566,6 +595,9 @@ def file_detail(request, file_id):
         'is_realm5_observation': is_realm5_observation,
         'realm5_observation_data': json.dumps(realm5_observation_data) if realm5_observation_data else None,
         'realm5_variables': json.dumps(realm5_variables) if realm5_variables else None,
+        'is_realm5_all': is_realm5_all,
+        'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
+        'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
     })
 
 def public_file_detail(request, file_id):
@@ -636,6 +668,11 @@ def public_file_detail(request, file_id):
     realm5_variables = None
     is_realm5_observation = False
     
+    # Check if this is a Realm5 all.json aggregated file
+    realm5_all_data = None
+    realm5_all_variables = None
+    is_realm5_all = False
+    
     if (file_obj.is_third_party and 
         file_obj.third_party_source == 'realm5' and 
         file_obj.name.endswith('.json') and
@@ -644,8 +681,31 @@ def public_file_detail(request, file_id):
             with file_obj.file.open('r') as f:
                 observation_json = json.load(f)
                 
-            # Check if it has the expected structure
-            if 'observations' in observation_json and isinstance(observation_json['observations'], list):
+            # Check if it's an all.json file (has daily_averages)
+            if 'daily_averages' in observation_json and isinstance(observation_json['daily_averages'], list):
+                daily_averages = observation_json['daily_averages']
+                if daily_averages:
+                    # Extract available variables from the first daily average
+                    first_avg = daily_averages[0]
+                    # Get all numeric variables (exclude 'date' and 'observation_count')
+                    realm5_all_variables = [key for key in first_avg.keys() 
+                                           if key not in ('date', 'observation_count') 
+                                           and isinstance(first_avg.get(key), (int, float))]
+                    
+                    # Prepare data for visualization
+                    realm5_all_data = {
+                        'device_name': observation_json.get('device_name'),
+                        'dev_eui': observation_json.get('dev_eui'),
+                        'device_type': observation_json.get('device_type'),
+                        'total_days': observation_json.get('total_days', len(daily_averages)),
+                        'date_range': observation_json.get('date_range', {}),
+                        'daily_averages': daily_averages,
+                        'variables': realm5_all_variables,
+                    }
+                    is_realm5_all = True
+            
+            # Check if it's a daily observation file (has observations)
+            elif 'observations' in observation_json and isinstance(observation_json['observations'], list):
                 observations = observation_json['observations']
                 if observations:
                     # Extract available variables from the first observation
@@ -667,6 +727,7 @@ def public_file_detail(request, file_id):
         except Exception as e:
             print(f"Error parsing Realm5 observation JSON: {e}")
             realm5_observation_data = None
+            realm5_all_data = None
     
     # Reuse the same template as private file detail, but with can_edit=False
     return render(request, 'filemanager/file_detail.html', {
@@ -680,6 +741,9 @@ def public_file_detail(request, file_id):
         'is_realm5_observation': is_realm5_observation,
         'realm5_observation_data': json.dumps(realm5_observation_data) if realm5_observation_data else None,
         'realm5_variables': json.dumps(realm5_variables) if realm5_variables else None,
+        'is_realm5_all': is_realm5_all,
+        'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
+        'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
     })
 
 @login_required

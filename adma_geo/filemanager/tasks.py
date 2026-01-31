@@ -957,6 +957,158 @@ def run_si_tool_task(
         return {"success": False, "error": str(e)}
 
 
+def _generate_all_json_for_device(device_folder, dev_eui, device_name, device_type, owner):
+    """
+    Generate all.json file for a device by reading all daily JSON files,
+    calculating daily averages for all numeric variables,
+    and storing one entry per day in chronological order.
+    
+    This function regenerates all.json from scratch each time.
+    
+    Args:
+        device_folder: Folder object for the device
+        dev_eui: Device EUI identifier
+        device_name: Friendly name of the device
+        device_type: Type of device (e.g., 'weather_station')
+        owner: Owner of the files
+    """
+    import json
+    import os
+    from datetime import datetime
+    from django.conf import settings
+    from django.core.files.base import ContentFile
+    from collections import defaultdict
+    
+    # Get all daily JSON files for this device (excluding all.json)
+    daily_files = File.objects.filter(
+        folder=device_folder,
+        owner=owner,
+        name__startswith=f"{dev_eui}_",
+        name__endswith=".json"
+    ).exclude(name="all.json").order_by('name')
+    
+    if not daily_files.exists():
+        logger.info(f"No daily files found for device {dev_eui}, skipping all.json generation")
+        return
+    
+    daily_averages = []
+    all_variable_names = set()  # Track all variable names across all days
+    
+    for daily_file in daily_files:
+        try:
+            # Read the daily JSON file
+            file_path = os.path.join(settings.MEDIA_ROOT, daily_file.file.name)
+            
+            if not os.path.exists(file_path):
+                logger.warning(f"Daily file not found on disk: {file_path}")
+                continue
+            
+            with open(file_path, 'r') as f:
+                daily_data = json.load(f)
+            
+            observations = daily_data.get('observations', [])
+            file_date = daily_data.get('date', '')
+            
+            if not observations:
+                continue
+            
+            # Collect all numeric values for each variable
+            variable_values = defaultdict(list)
+            
+            for obs in observations:
+                for key, value in obs.items():
+                    # Skip non-numeric fields like 'timestamp'
+                    if key in ('timestamp', 'date', 'sampled_for_hour'):
+                        continue
+                    
+                    # Try to convert to float for averaging
+                    try:
+                        if value is not None:
+                            numeric_value = float(value)
+                            variable_values[key].append(numeric_value)
+                            all_variable_names.add(key)
+                    except (ValueError, TypeError):
+                        # Skip non-numeric values
+                        continue
+            
+            # Calculate daily averages
+            if variable_values:
+                daily_avg = {
+                    'date': file_date,
+                    'observation_count': len(observations),
+                }
+                
+                for var_name, values in variable_values.items():
+                    if values:
+                        avg_value = sum(values) / len(values)
+                        # Round to 2 decimal places for readability
+                        daily_avg[var_name] = round(avg_value, 2)
+                
+                daily_averages.append(daily_avg)
+                
+        except Exception as e:
+            logger.warning(f"Error processing daily file {daily_file.name}: {e}")
+            continue
+    
+    # Sort by date
+    daily_averages.sort(key=lambda x: x.get('date', ''))
+    
+    # Create the all.json content
+    all_json_data = {
+        'dev_eui': dev_eui,
+        'device_name': device_name,
+        'device_type': device_type,
+        'description': 'Daily averages of all numeric variables',
+        'variables': sorted(list(all_variable_names)),
+        'total_days': len(daily_averages),
+        'date_range': {
+            'start': daily_averages[0].get('date') if daily_averages else None,
+            'end': daily_averages[-1].get('date') if daily_averages else None,
+        },
+        'generated_at': datetime.now().isoformat(),
+        'daily_averages': daily_averages,
+    }
+    
+    json_content = json.dumps(all_json_data, indent=2, default=str)
+    
+    # Check if all.json already exists - delete it first to regenerate
+    existing_all_json = File.objects.filter(
+        name="all.json",
+        folder=device_folder,
+        owner=owner
+    ).first()
+    
+    if existing_all_json:
+        # Delete the old file from disk and database
+        try:
+            old_file_path = os.path.join(settings.MEDIA_ROOT, existing_all_json.file.name)
+            if os.path.exists(old_file_path):
+                os.remove(old_file_path)
+        except Exception as e:
+            logger.warning(f"Could not delete old all.json file: {e}")
+        existing_all_json.delete()
+        logger.info(f"Deleted old all.json for device {dev_eui}")
+    
+    # Create new all.json file
+    file_obj = File(
+        name="all.json",
+        folder=device_folder,
+        owner=owner,
+        file_type='text',
+        mime_type='application/json',
+        is_public=True,
+        is_third_party=True,
+        third_party_source='realm5',
+        third_party_id=f"{dev_eui}_all",
+    )
+    
+    file_obj.file.save("all.json", ContentFile(json_content.encode('utf-8')))
+    file_obj.file_size = len(json_content)
+    file_obj.save()
+    
+    logger.info(f"Created all.json for device {dev_eui} with {len(daily_averages)} daily averages")
+
+
 @shared_task(bind=True)
 def sync_realm5_task(self):
     """
@@ -1169,6 +1321,15 @@ def sync_realm5_task(self):
                         # Continue to next day even if one day fails
                     
                     current_date += timedelta(days=1)
+                
+                # Step 4: Generate all.json aggregated file for this device
+                # This file contains daily averages of all numeric variables from all daily files
+                try:
+                    _generate_all_json_for_device(device_folder, dev_eui, device_name, device_type, owner)
+                    logger.info(f"Generated all.json for device: {dev_eui}")
+                except Exception as e:
+                    logger.warning(f"Failed to generate all.json for device {dev_eui}: {e}")
+                    results['errors'].append(f"Failed to generate all.json for {dev_eui}: {e}")
                     
             except Exception as e:
                 error_msg = f"Error processing observations for device {dev_eui}: {e}"
