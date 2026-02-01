@@ -221,6 +221,93 @@ class Realm5Client:
             logger.error(f"Realm5 API request error: {e}")
             raise
     
+    def get_markers(self, organization_id: int, page: int = 1, per_page: int = 50) -> Dict[str, Any]:
+        """
+        Get markers (instrument installation points) for an organization.
+        
+        Markers contain location information and link to installed instruments/devices.
+        
+        Args:
+            organization_id: The organization ID
+            page: Page number (starting from 1)
+            per_page: Number of results per page (1-200, default 50)
+            
+        Returns:
+            Dict containing 'summary' and 'items' fields
+            
+        Example response:
+            {
+                "summary": {"total": 10, "page": 1, "per_page": 50, "pages": 1},
+                "items": [
+                    {
+                        "id": 123,
+                        "organizationId": "456",
+                        "name": "Field Station 1",
+                        "location": "40.1234, -96.5678",
+                        "currentInstalledInstrument": {
+                            "installable_type": "weather_station",
+                            "installable_id": "26218821",
+                            ...
+                        }
+                    },
+                    ...
+                ]
+            }
+        """
+        logger.info(f"Fetching markers for organization {organization_id}...")
+        
+        params = {
+            'page': page,
+            'per_page': per_page,
+        }
+        
+        response = self._make_request('GET', f'/v2/organizations/{organization_id}/markers', params=params)
+        
+        # Log the response for debugging
+        if isinstance(response, dict):
+            summary = response.get('summary', {})
+            items = response.get('items', [])
+            logger.info(f"Found {summary.get('total', len(items))} markers for organization {organization_id}")
+        
+        return response
+    
+    def get_all_markers(self, organization_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all markers for an organization (handles pagination).
+        
+        Args:
+            organization_id: The organization ID
+            
+        Returns:
+            List of all marker dictionaries
+        """
+        all_markers = []
+        page = 1
+        per_page = 200  # Max allowed
+        
+        while True:
+            response = self.get_markers(organization_id, page=page, per_page=per_page)
+            
+            if isinstance(response, dict):
+                items = response.get('items', [])
+                if isinstance(items, list):
+                    all_markers.extend(items)
+                elif isinstance(items, dict):
+                    # Single item returned as dict
+                    all_markers.append(items)
+                
+                summary = response.get('summary', {})
+                total_pages = summary.get('pages', 1)
+                
+                if page >= total_pages:
+                    break
+                page += 1
+            else:
+                break
+        
+        logger.info(f"Fetched total of {len(all_markers)} markers for organization {organization_id}")
+        return all_markers
+    
     def test_connection(self) -> bool:
         """
         Test the API connection and authentication.

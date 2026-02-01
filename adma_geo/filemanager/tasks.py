@@ -1179,18 +1179,23 @@ def sync_realm5_task(self):
         
         # Step 2: Clean up existing non-weather-station folders
         # We only want folders for weather_station devices
-        weather_station_dev_euis = set()
+        # Build a set of valid folder identifiers (friendly_names and dev_euis for backward compatibility)
+        weather_station_identifiers = set()
         for device in devices:
             if device.get('device_type') == 'weather_station':
                 dev_eui_hex = device.get('dev_eui_hex')
                 dev_eui_numeric = device.get('dev_eui') or device.get('devEui') or device.get('id')
                 dev_eui = str(dev_eui_hex) if dev_eui_hex else str(dev_eui_numeric)
-                weather_station_dev_euis.add(dev_eui)
+                friendly_name = device.get('friendly_name') or device.get('name') or dev_eui
+                # Add both friendly_name and dev_eui to allow transition period
+                weather_station_identifiers.add(friendly_name)
+                weather_station_identifiers.add(dev_eui)
         
         # Find and remove folders for non-weather-station devices
         existing_folders = Folder.objects.filter(parent=realm5_folder, owner=owner)
         for folder in existing_folders:
-            if folder.name not in weather_station_dev_euis:
+            # Check if folder matches any weather station identifier (by name or third_party_id)
+            if folder.name not in weather_station_identifiers and folder.third_party_id not in weather_station_identifiers:
                 logger.info(f"Removing folder for non-weather-station device: {folder.name}")
                 folder.delete()
         
@@ -1213,33 +1218,46 @@ def sync_realm5_task(self):
                 logger.warning(f"Device missing dev_eui: {device}")
                 continue
             
-            # Use hex for folder name if available, otherwise numeric
+            # Use hex for dev_eui reference, numeric for API calls
             dev_eui = str(dev_eui_hex) if dev_eui_hex else str(dev_eui_numeric)
             dev_eui_for_api = str(dev_eui_numeric)  # API always needs numeric
             device_name = device.get('friendly_name') or device.get('name') or dev_eui
             
-            logger.info(f"Processing weather station: {dev_eui} ({device_name})")
+            # Use friendly_name as folder name (cleaned up)
+            folder_name = device_name.strip()
             
-            # Check if folder exists for this device
+            logger.info(f"Processing weather station: {dev_eui} ({folder_name})")
+            
+            # Check if folder exists for this device by:
+            # 1. First check by friendly_name (new behavior)
+            # 2. Then check by third_party_id (dev_eui) for backward compatibility
             device_folder = Folder.objects.filter(
-                name=dev_eui,
+                name=folder_name,
                 parent=realm5_folder,
                 owner=owner
             ).first()
             
             if not device_folder:
-                # Create new folder for this weather station
+                # Also check by third_party_id (in case folder was created with old naming)
+                device_folder = Folder.objects.filter(
+                    third_party_id=dev_eui,
+                    parent=realm5_folder,
+                    owner=owner
+                ).first()
+            
+            if not device_folder:
+                # Create new folder for this weather station using friendly_name
                 device_folder = Folder.objects.create(
-                    name=dev_eui,
+                    name=folder_name,
                     parent=realm5_folder,
                     owner=owner,
                     is_public=True,  # Inherit public status from parent
                     is_third_party=True,
                     third_party_source='realm5',
-                    third_party_id=dev_eui,
+                    third_party_id=dev_eui,  # Store dev_eui as ID for reference
                 )
                 results['folders_created'] += 1
-                logger.info(f"Created folder for weather station: {dev_eui}")
+                logger.info(f"Created folder for weather station: {folder_name} (dev_eui: {dev_eui})")
             
             try:
                 # Iterate from SYNC_START_DATE to yesterday, fetching observations day by day
