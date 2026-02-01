@@ -248,8 +248,8 @@
                 <div class="d-flex align-items-center">
                     <label for="jdRootBaseMapSelector" class="me-2 mb-0 small text-muted">Base Map:</label>
                     <select id="jdRootBaseMapSelector" class="form-select form-select-sm" style="width: auto;">
-                        <option value="osm" selected>OpenStreetMap</option>
-                        <option value="satellite">Satellite (Esri)</option>
+                        <option value="osm">OpenStreetMap</option>
+                        <option value="satellite" selected>Satellite (Esri)</option>
                         <option value="terrain">Terrain (Stamen)</option>
                         <option value="topo">Topographic (OpenTopo)</option>
                         <option value="dark">Dark (CartoDB)</option>
@@ -1634,8 +1634,9 @@ function createMultiFieldBoundaryMap(targetId, fieldBoundaries, isPublicView) {
         source: vectorSource
     });
     
+    // Use satellite as default base layer for John Deere root map
     const baseLayer = new ol.layer.Tile({
-        source: new ol.source.OSM()
+        source: getBaseMapSource('satellite')
     });
     
     const centerX = (combinedExtent[0] + combinedExtent[2]) / 2;
