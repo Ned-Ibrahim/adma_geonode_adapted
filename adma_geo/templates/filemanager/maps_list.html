@@ -4,6 +4,8 @@
 {% block title %}Maps - ADMA GEO{% endblock %}
 
 {% block extra_css %}
+<!-- OpenLayers CSS -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.4.0/ol.css">
 <style>
     .map-card {
         transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
@@ -94,6 +96,38 @@
         transform: translateY(0) !important;
         box-shadow: 0 2px 8px rgba(208, 0, 0, 0.2) !important;
     }
+    
+    /* Navigation Map Panel */
+    #navMap {
+        height: 350px;
+        width: 100%;
+        border-radius: 8px;
+    }
+    
+    .nav-map-legend {
+        font-size: 0.85rem;
+    }
+    
+    .nav-map-legend .legend-item {
+        display: inline-flex;
+        align-items: center;
+        margin-right: 1rem;
+    }
+    
+    .nav-map-legend .legend-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 0.5rem;
+    }
+    
+    .nav-map-legend .legend-dot.my-map {
+        background-color: #d00000;
+    }
+    
+    .nav-map-legend .legend-dot.public-map {
+        background-color: #28a745;
+    }
 </style>
 {% endblock %}
 
@@ -127,6 +161,37 @@
                     </a>
                 </div>
             </div>
+
+            <!-- Navigation Map Panel -->
+            {% if has_maps_with_locations %}
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="fas fa-map-marker-alt me-2 text-danger"></i>Map Locations
+                    </h5>
+                    <div class="nav-map-legend">
+                        <span class="legend-item">
+                            <span class="legend-dot my-map"></span> My Maps
+                        </span>
+                        <span class="legend-item">
+                            <span class="legend-dot public-map"></span> Public Maps
+                        </span>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="mb-2 px-3 pt-3">
+                        <label class="form-label mb-1"><small>Base Map:</small></label>
+                        <select id="navMapBaseLayer" class="form-select form-select-sm" style="width: 200px;">
+                            <option value="osm">OpenStreetMap</option>
+                            <option value="satellite">Satellite</option>
+                            <option value="terrain">Terrain</option>
+                            <option value="topo">Topographic</option>
+                        </select>
+                    </div>
+                    <div id="navMap"></div>
+                </div>
+            </div>
+            {% endif %}
 
             <!-- User's Maps Section -->
             {% if user_maps %}
@@ -305,7 +370,358 @@
 {% endblock %}
 
 {% block extra_js %}
+<!-- OpenLayers JS -->
+<script src="https://cdn.jsdelivr.net/npm/ol@v7.4.0/dist/ol.js"></script>
 <script>
+// Navigation Map initialization with spiderfier for overlapping markers
+{% if has_maps_with_locations %}
+(function() {
+    const mapsWithLocations = {{ maps_with_locations|safe }};
+    
+    if (mapsWithLocations.length === 0) return;
+    
+    // Store original coordinates for each feature
+    const originalCoords = new Map();
+    
+    // Create features for each map
+    const features = [];
+    mapsWithLocations.forEach(function(mapData) {
+        const coords = ol.proj.fromLonLat([mapData.lng, mapData.lat]);
+        const feature = new ol.Feature({
+            geometry: new ol.geom.Point(coords),
+            name: mapData.name,
+            mapId: mapData.id,
+            isOwner: mapData.is_owner,
+            isPublic: mapData.is_public,
+            layerCount: mapData.layer_count,
+            originalLng: mapData.lng,
+            originalLat: mapData.lat
+        });
+        originalCoords.set(mapData.id, coords);
+        features.push(feature);
+    });
+    
+    // Spiderfier configuration
+    const SPIDER_LEG_LENGTH = 60; // pixels
+    const PROXIMITY_THRESHOLD = 30; // pixels - distance to consider markers as overlapping
+    const SPIDER_COLLAPSE_DISTANCE = 100; // pixels - distance from cluster center to collapse
+    
+    // Track spiderfied state
+    let spiderfiedCluster = null;
+    let spiderLineFeatures = [];
+    let spiderCenterCoord = null; // Track the center of the spiderfied cluster
+    
+    // Style function for markers
+    function markerStyle(feature, isHovered, isSpiderfied) {
+        const isOwner = feature.get('isOwner');
+        const name = feature.get('name');
+        
+        // Red for user's maps, green for public maps from others
+        const color = isOwner ? '#d00000' : '#28a745';
+        const radius = isHovered ? 12 : (isSpiderfied ? 10 : 8);
+        const strokeWidth = isHovered ? 3 : 2;
+        
+        const styles = [
+            new ol.style.Style({
+                image: new ol.style.Circle({
+                    radius: radius,
+                    fill: new ol.style.Fill({ color: color }),
+                    stroke: new ol.style.Stroke({ color: '#ffffff', width: strokeWidth })
+                }),
+                text: new ol.style.Text({
+                    text: name,
+                    font: isHovered ? 'bold 13px Arial' : '12px Arial',
+                    offsetY: -20,
+                    fill: new ol.style.Fill({ color: '#333' }),
+                    stroke: new ol.style.Stroke({ color: '#fff', width: 3 }),
+                    overflow: true
+                })
+            })
+        ];
+        
+        // Add "Click to view" tooltip on hover
+        if (isHovered) {
+            styles.push(new ol.style.Style({
+                text: new ol.style.Text({
+                    text: '(Click to open)',
+                    font: 'italic 11px Arial',
+                    offsetY: -35,
+                    fill: new ol.style.Fill({ color: '#666' }),
+                    stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+                })
+            }));
+        }
+        
+        return styles;
+    }
+    
+    // Style for spider legs (lines connecting spiderfied markers to original position)
+    function spiderLegStyle() {
+        return new ol.style.Style({
+            stroke: new ol.style.Stroke({
+                color: 'rgba(100, 100, 100, 0.6)',
+                width: 2,
+                lineDash: [4, 4]
+            })
+        });
+    }
+    
+    // Create vector layer for markers
+    const markersSource = new ol.source.Vector({ features: features });
+    const markersLayer = new ol.layer.Vector({
+        source: markersSource,
+        style: function(feature) {
+            return markerStyle(feature, false, false);
+        }
+    });
+    
+    // Create layer for spider legs
+    const spiderLinesSource = new ol.source.Vector();
+    const spiderLinesLayer = new ol.layer.Vector({
+        source: spiderLinesSource,
+        style: spiderLegStyle()
+    });
+    
+    // Base layers
+    const baseLayers = {
+        osm: new ol.layer.Tile({
+            source: new ol.source.OSM()
+        }),
+        satellite: new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attributions: '© Esri'
+            })
+        }),
+        terrain: new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}',
+                attributions: '© Esri'
+            })
+        }),
+        topo: new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+                attributions: '© Esri'
+            })
+        })
+    };
+    
+    // Calculate extent to fit all markers
+    const extent = markersSource.getExtent();
+    
+    // Create the map
+    const navMap = new ol.Map({
+        target: 'navMap',
+        layers: [baseLayers.osm, spiderLinesLayer, markersLayer],
+        view: new ol.View({
+            center: ol.extent.getCenter(extent),
+            zoom: 4
+        })
+    });
+    
+    // Fit the view to all markers with padding
+    if (features.length > 0) {
+        navMap.getView().fit(extent, {
+            padding: [50, 50, 50, 50],
+            maxZoom: 15
+        });
+    }
+    
+    // Find overlapping features at a given pixel
+    function findOverlappingFeatures(pixel) {
+        const overlapping = [];
+        const resolution = navMap.getView().getResolution();
+        const thresholdCoord = PROXIMITY_THRESHOLD * resolution;
+        
+        features.forEach(function(feature) {
+            const featurePixel = navMap.getPixelFromCoordinate(
+                feature.getGeometry().getCoordinates()
+            );
+            if (featurePixel) {
+                const dx = pixel[0] - featurePixel[0];
+                const dy = pixel[1] - featurePixel[1];
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < PROXIMITY_THRESHOLD) {
+                    overlapping.push(feature);
+                }
+            }
+        });
+        
+        return overlapping;
+    }
+    
+    // Find features that are close to each other (cluster detection)
+    function findClusteredFeatures(centerFeature) {
+        const clustered = [];
+        const centerCoord = originalCoords.get(centerFeature.get('mapId'));
+        const resolution = navMap.getView().getResolution();
+        
+        features.forEach(function(feature) {
+            const coord = originalCoords.get(feature.get('mapId'));
+            const pixel1 = navMap.getPixelFromCoordinate(centerCoord);
+            const pixel2 = navMap.getPixelFromCoordinate(coord);
+            
+            if (pixel1 && pixel2) {
+                const dx = pixel1[0] - pixel2[0];
+                const dy = pixel1[1] - pixel2[1];
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < PROXIMITY_THRESHOLD) {
+                    clustered.push(feature);
+                }
+            }
+        });
+        
+        return clustered;
+    }
+    
+    // Spiderfy a cluster of overlapping markers
+    function spiderfy(clusterFeatures, centerCoord) {
+        if (clusterFeatures.length <= 1) return;
+        
+        // Clear any existing spiderfied state
+        unspiderfy();
+        
+        spiderfiedCluster = clusterFeatures;
+        spiderCenterCoord = centerCoord; // Store the center for distance checking
+        const count = clusterFeatures.length;
+        const angleStep = (2 * Math.PI) / count;
+        const resolution = navMap.getView().getResolution();
+        const legLengthCoord = SPIDER_LEG_LENGTH * resolution;
+        
+        clusterFeatures.forEach(function(feature, index) {
+            const angle = angleStep * index - Math.PI / 2; // Start from top
+            const offsetX = Math.cos(angle) * legLengthCoord;
+            const offsetY = Math.sin(angle) * legLengthCoord;
+            
+            const originalCoord = originalCoords.get(feature.get('mapId'));
+            const newCoord = [centerCoord[0] + offsetX, centerCoord[1] + offsetY];
+            
+            // Move the feature
+            feature.getGeometry().setCoordinates(newCoord);
+            feature.setStyle(markerStyle(feature, false, true));
+            
+            // Create spider leg line
+            const lineFeature = new ol.Feature({
+                geometry: new ol.geom.LineString([centerCoord, newCoord])
+            });
+            spiderLineFeatures.push(lineFeature);
+            spiderLinesSource.addFeature(lineFeature);
+        });
+    }
+    
+    // Unspiderfy - restore markers to original positions
+    function unspiderfy() {
+        if (!spiderfiedCluster) return;
+        
+        spiderfiedCluster.forEach(function(feature) {
+            const originalCoord = originalCoords.get(feature.get('mapId'));
+            feature.getGeometry().setCoordinates(originalCoord);
+            feature.setStyle(null); // Reset to default style
+        });
+        
+        // Remove spider leg lines
+        spiderLineFeatures.forEach(function(lineFeature) {
+            spiderLinesSource.removeFeature(lineFeature);
+        });
+        spiderLineFeatures = [];
+        spiderfiedCluster = null;
+        spiderCenterCoord = null;
+    }
+    
+    // Check if a pixel is within the spider zone (close enough to the cluster center)
+    function isWithinSpiderZone(pixel) {
+        if (!spiderCenterCoord) return false;
+        
+        const centerPixel = navMap.getPixelFromCoordinate(spiderCenterCoord);
+        if (!centerPixel) return false;
+        
+        const dx = pixel[0] - centerPixel[0];
+        const dy = pixel[1] - centerPixel[1];
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Stay within spider zone if close to center (includes leg length + some buffer)
+        return distance < (SPIDER_LEG_LENGTH + 30);
+    }
+    
+    // Track hovered feature
+    let hoveredFeature = null;
+    
+    // Pointer move handler for hover effects
+    navMap.on('pointermove', function(evt) {
+        const feature = navMap.forEachFeatureAtPixel(evt.pixel, function(feature) {
+            // Only return marker features, not spider lines
+            if (feature.get('mapId')) return feature;
+        });
+        
+        // Check if we should collapse the spider (always check on every move)
+        if (spiderfiedCluster && !isWithinSpiderZone(evt.pixel)) {
+            unspiderfy();
+            hoveredFeature = null;
+            navMap.getTargetElement().style.cursor = '';
+            return;
+        }
+        
+        if (feature !== hoveredFeature) {
+            // Reset previous hovered feature
+            if (hoveredFeature) {
+                const isInSpider = spiderfiedCluster && spiderfiedCluster.includes(hoveredFeature);
+                hoveredFeature.setStyle(markerStyle(hoveredFeature, false, isInSpider));
+            }
+            
+            // Style new hovered feature
+            if (feature) {
+                const isInSpider = spiderfiedCluster && spiderfiedCluster.includes(feature);
+                feature.setStyle(markerStyle(feature, true, isInSpider));
+                navMap.getTargetElement().style.cursor = 'pointer';
+                
+                // Check for overlapping features and spiderfy if needed
+                if (!spiderfiedCluster) {
+                    const clustered = findClusteredFeatures(feature);
+                    if (clustered.length > 1) {
+                        const centerCoord = originalCoords.get(feature.get('mapId'));
+                        spiderfy(clustered, centerCoord);
+                        // Re-apply hover style after spiderfying
+                        feature.setStyle(markerStyle(feature, true, true));
+                    }
+                }
+            } else {
+                navMap.getTargetElement().style.cursor = '';
+            }
+            
+            hoveredFeature = feature;
+        }
+    });
+    
+    // Click handler for navigation
+    navMap.on('click', function(evt) {
+        const feature = navMap.forEachFeatureAtPixel(evt.pixel, function(feature) {
+            // Only return marker features, not spider lines
+            if (feature.get('mapId')) return feature;
+        });
+        
+        if (feature) {
+            const mapId = feature.get('mapId');
+            // Navigate to the map detail page
+            window.location.href = '/maps/' + mapId + '/';
+        }
+    });
+    
+    // Unspiderfy when zooming or panning
+    navMap.getView().on('change:resolution', function() {
+        unspiderfy();
+    });
+    
+    // Base layer switcher
+    let currentBaseLayer = baseLayers.osm;
+    document.getElementById('navMapBaseLayer').addEventListener('change', function(e) {
+        navMap.removeLayer(currentBaseLayer);
+        currentBaseLayer = baseLayers[e.target.value];
+        navMap.getLayers().insertAt(0, currentBaseLayer);
+    });
+})();
+{% endif %}
+
 function changeView(viewMode) {
     const url = new URL(window.location);
     url.searchParams.set('view', viewMode);

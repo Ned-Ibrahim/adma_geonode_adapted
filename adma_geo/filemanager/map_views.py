@@ -51,11 +51,28 @@ class MapsListView(LoginRequiredMixin, ListView):
         context['view_mode'] = self.request.GET.get('view', 'panel')
         
         # Separate user's maps from public maps
-        user_maps = Map.objects.filter(owner=self.request.user).order_by('-updated_at')
-        public_maps = Map.objects.filter(is_public=True).exclude(owner=self.request.user).order_by('-updated_at')
+        user_maps = Map.objects.filter(owner=self.request.user, deletion_in_progress=False).order_by('-updated_at')
+        public_maps = Map.objects.filter(is_public=True, deletion_in_progress=False).exclude(owner=self.request.user).order_by('-updated_at')
         
         context['user_maps'] = user_maps
         context['public_maps'] = public_maps
+        
+        # Collect all maps with their locations for the navigation map
+        all_maps_with_locations = []
+        for map_obj in (user_maps | public_maps).distinct():
+            if map_obj.center_lat and map_obj.center_lng:
+                all_maps_with_locations.append({
+                    'id': str(map_obj.id),
+                    'name': map_obj.name,
+                    'lat': map_obj.center_lat,
+                    'lng': map_obj.center_lng,
+                    'is_owner': map_obj.owner == self.request.user,
+                    'is_public': map_obj.is_public,
+                    'layer_count': map_obj.layer_count,
+                })
+        
+        context['maps_with_locations'] = json.dumps(all_maps_with_locations)
+        context['has_maps_with_locations'] = len(all_maps_with_locations) > 0
         
         return context
 
