@@ -450,6 +450,10 @@ def folder_detail(request, folder_id):
         files_end = files_start + items_per_page
         files = files_queryset[files_start:files_end]
     
+    # Check if this is the John Deere root folder
+    is_jd_root = False
+    jd_all_field_boundaries = []
+    
     # Check if this is a John Deere field folder (has johndeere parent and boundary subfolder)
     jd_field_boundary_file = None
     is_jd_field = False
@@ -459,8 +463,28 @@ def folder_detail(request, folder_id):
     is_jd_operation = False
     
     if folder.is_third_party and folder.third_party_source == 'johndeere':
+        # Check if this IS the John Deere root folder
+        if folder.parent is None and folder.name == 'John Deere':
+            is_jd_root = True
+            # Collect all field boundaries from child field folders
+            for field_folder in folder.subfolders.all():
+                boundary_folder_name = f"{field_folder.name}_boundary"
+                boundary_folder = field_folder.subfolders.filter(name=boundary_folder_name).first()
+                if boundary_folder:
+                    boundary_file = File.objects.filter(
+                        folder=boundary_folder,
+                        name__endswith='.shp',
+                        is_spatial=True
+                    ).first()
+                    if boundary_file and boundary_file.spatial_extent:
+                        jd_all_field_boundaries.append({
+                            'name': field_folder.name,
+                            'file': boundary_file,
+                            'extent': boundary_file.spatial_extent,
+                        })
+        
         # Check if parent is the John Deere root folder (this would make it a field folder)
-        if folder.parent and folder.parent.name == 'John Deere':
+        elif folder.parent and folder.parent.name == 'John Deere':
             is_jd_field = True
             # Look for {field_name}_boundary subfolder
             boundary_folder_name = f"{folder.name}_boundary"
@@ -533,6 +557,8 @@ def folder_detail(request, folder_id):
         'can_edit': folder.owner == request.user,
         'page_obj': page_obj,
         'total_items': total_items,
+        'is_jd_root': is_jd_root,
+        'jd_all_field_boundaries': jd_all_field_boundaries,
         'is_jd_field': is_jd_field,
         'jd_field_boundary_file': jd_field_boundary_file,
         'is_jd_operation': is_jd_operation,
@@ -554,6 +580,10 @@ def public_folder_detail(request, folder_id):
     subfolders = folder.subfolders.filter(is_public=True)
     files = folder.files.filter(is_public=True)
     
+    # Check if this is the John Deere root folder
+    is_jd_root = False
+    jd_all_field_boundaries = []
+    
     # Check if this is a John Deere field folder (has johndeere parent and boundary subfolder)
     jd_field_boundary_file = None
     is_jd_field = False
@@ -563,8 +593,29 @@ def public_folder_detail(request, folder_id):
     is_jd_operation = False
     
     if folder.is_third_party and folder.third_party_source == 'johndeere':
+        # Check if this IS the John Deere root folder
+        if folder.parent is None and folder.name == 'John Deere':
+            is_jd_root = True
+            # Collect all field boundaries from child field folders (public only)
+            for field_folder in folder.subfolders.filter(is_public=True):
+                boundary_folder_name = f"{field_folder.name}_boundary"
+                boundary_folder = field_folder.subfolders.filter(name=boundary_folder_name, is_public=True).first()
+                if boundary_folder:
+                    boundary_file = File.objects.filter(
+                        folder=boundary_folder,
+                        name__endswith='.shp',
+                        is_spatial=True,
+                        is_public=True
+                    ).first()
+                    if boundary_file and boundary_file.spatial_extent:
+                        jd_all_field_boundaries.append({
+                            'name': field_folder.name,
+                            'file': boundary_file,
+                            'extent': boundary_file.spatial_extent,
+                        })
+        
         # Check if parent is the John Deere root folder (this would make it a field folder)
-        if folder.parent and folder.parent.name == 'John Deere':
+        elif folder.parent and folder.parent.name == 'John Deere':
             is_jd_field = True
             # Look for {field_name}_boundary subfolder
             boundary_folder_name = f"{folder.name}_boundary"
@@ -639,6 +690,8 @@ def public_folder_detail(request, folder_id):
         'breadcrumbs': folder.get_public_breadcrumbs(),  # Use public breadcrumbs
         'can_edit': False,  # Public users can't edit
         'is_public_view': True,  # Flag to adjust breadcrumbs and navigation
+        'is_jd_root': is_jd_root,
+        'jd_all_field_boundaries': jd_all_field_boundaries,
         'is_jd_field': is_jd_field,
         'jd_field_boundary_file': jd_field_boundary_file,
         'is_jd_operation': is_jd_operation,
