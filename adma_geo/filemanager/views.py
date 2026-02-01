@@ -450,6 +450,43 @@ def folder_detail(request, folder_id):
         files_end = files_start + items_per_page
         files = files_queryset[files_start:files_end]
     
+    # Check if this is a John Deere field folder (has johndeere parent and boundary subfolder)
+    jd_field_boundary_file = None
+    is_jd_field = False
+    
+    # Check if this is a John Deere field operation folder
+    jd_operation_boundary_file = None
+    is_jd_operation = False
+    
+    if folder.is_third_party and folder.third_party_source == 'johndeere':
+        # Check if parent is the John Deere root folder (this would make it a field folder)
+        if folder.parent and folder.parent.name == 'John Deere':
+            is_jd_field = True
+            # Look for {field_name}_boundary subfolder
+            boundary_folder_name = f"{folder.name}_boundary"
+            boundary_folder = folder.subfolders.filter(name=boundary_folder_name).first()
+            if boundary_folder:
+                # Find the .shp file in the boundary folder
+                jd_field_boundary_file = File.objects.filter(
+                    folder=boundary_folder,
+                    name__endswith='.shp',
+                    is_spatial=True
+                ).first()
+        
+        # Check if this is a field operation folder (parent is 'field_operations')
+        elif folder.parent and folder.parent.name == 'field_operations':
+            is_jd_operation = True
+            # Look for {operation_id}_boundary subfolder
+            boundary_folder_name = f"{folder.name}_boundary"
+            boundary_folder = folder.subfolders.filter(name=boundary_folder_name).first()
+            if boundary_folder:
+                # Find the .shp file in the boundary folder
+                jd_operation_boundary_file = File.objects.filter(
+                    folder=boundary_folder,
+                    name__endswith='.shp',
+                    is_spatial=True
+                ).first()
+    
     return render(request, 'filemanager/folder_detail.html', {
         'folder': folder,
         'subfolders': subfolders,
@@ -458,6 +495,10 @@ def folder_detail(request, folder_id):
         'can_edit': folder.owner == request.user,
         'page_obj': page_obj,
         'total_items': total_items,
+        'is_jd_field': is_jd_field,
+        'jd_field_boundary_file': jd_field_boundary_file,
+        'is_jd_operation': is_jd_operation,
+        'jd_operation_boundary_file': jd_operation_boundary_file,
     })
 
 def public_folder_detail(request, folder_id):
@@ -472,6 +513,45 @@ def public_folder_detail(request, folder_id):
     subfolders = folder.subfolders.filter(is_public=True)
     files = folder.files.filter(is_public=True)
     
+    # Check if this is a John Deere field folder (has johndeere parent and boundary subfolder)
+    jd_field_boundary_file = None
+    is_jd_field = False
+    
+    # Check if this is a John Deere field operation folder
+    jd_operation_boundary_file = None
+    is_jd_operation = False
+    
+    if folder.is_third_party and folder.third_party_source == 'johndeere':
+        # Check if parent is the John Deere root folder (this would make it a field folder)
+        if folder.parent and folder.parent.name == 'John Deere':
+            is_jd_field = True
+            # Look for {field_name}_boundary subfolder
+            boundary_folder_name = f"{folder.name}_boundary"
+            boundary_folder = folder.subfolders.filter(name=boundary_folder_name, is_public=True).first()
+            if boundary_folder:
+                # Find the .shp file in the boundary folder
+                jd_field_boundary_file = File.objects.filter(
+                    folder=boundary_folder,
+                    name__endswith='.shp',
+                    is_spatial=True,
+                    is_public=True
+                ).first()
+        
+        # Check if this is a field operation folder (parent is 'field_operations')
+        elif folder.parent and folder.parent.name == 'field_operations':
+            is_jd_operation = True
+            # Look for {operation_id}_boundary subfolder
+            boundary_folder_name = f"{folder.name}_boundary"
+            boundary_folder = folder.subfolders.filter(name=boundary_folder_name, is_public=True).first()
+            if boundary_folder:
+                # Find the .shp file in the boundary folder
+                jd_operation_boundary_file = File.objects.filter(
+                    folder=boundary_folder,
+                    name__endswith='.shp',
+                    is_spatial=True,
+                    is_public=True
+                ).first()
+    
     # Reuse the same template as private folder detail, but with public view context
     return render(request, 'filemanager/folder_detail.html', {
         'folder': folder,
@@ -480,6 +560,10 @@ def public_folder_detail(request, folder_id):
         'breadcrumbs': folder.get_public_breadcrumbs(),  # Use public breadcrumbs
         'can_edit': False,  # Public users can't edit
         'is_public_view': True,  # Flag to adjust breadcrumbs and navigation
+        'is_jd_field': is_jd_field,
+        'jd_field_boundary_file': jd_field_boundary_file,
+        'is_jd_operation': is_jd_operation,
+        'jd_operation_boundary_file': jd_operation_boundary_file,
     })
 
 @login_required

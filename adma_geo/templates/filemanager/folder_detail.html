@@ -3,6 +3,10 @@
 {% block title %}{{ folder.name }} - ADMA{% endblock %}
 
 {% block extra_css %}
+<!-- OpenLayers CSS for John Deere boundary map -->
+{% if is_jd_field and jd_field_boundary_file or is_jd_operation and jd_operation_boundary_file %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v8.1.0/ol.css">
+{% endif %}
 <style>
 .folder-item, .file-item {
     background: #f8f9fa;
@@ -230,6 +234,70 @@
         </div>
     </div>
 </div>
+
+<!-- John Deere Field Boundary Map Panel -->
+{% if is_jd_field and jd_field_boundary_file %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-map-marked-alt me-2"></i>Field Boundary Map
+                </h5>
+                <div class="d-flex align-items-center">
+                    <label for="jdBaseMapSelector" class="me-2 mb-0 small text-muted">Base Map:</label>
+                    <select id="jdBaseMapSelector" class="form-select form-select-sm" style="width: auto;">
+                        <option value="osm" selected>OpenStreetMap</option>
+                        <option value="satellite">Satellite (Esri)</option>
+                        <option value="terrain">Terrain (Stamen)</option>
+                        <option value="topo">Topographic (OpenTopo)</option>
+                        <option value="dark">Dark (CartoDB)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="jdFieldMap" style="width: 100%; height: 400px; border-radius: 8px; border: 1px solid #dee2e6;"></div>
+                <div class="mt-2 text-muted small">
+                    <i class="fas fa-info-circle me-1"></i>
+                    Showing boundary from: <strong>{{ jd_field_boundary_file.name }}</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- John Deere Field Operation Boundary Map Panel -->
+{% if is_jd_operation and jd_operation_boundary_file %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-tractor me-2"></i>Operation Boundary Map
+                </h5>
+                <div class="d-flex align-items-center">
+                    <label for="jdOpBaseMapSelector" class="me-2 mb-0 small text-muted">Base Map:</label>
+                    <select id="jdOpBaseMapSelector" class="form-select form-select-sm" style="width: auto;">
+                        <option value="osm" selected>OpenStreetMap</option>
+                        <option value="satellite">Satellite (Esri)</option>
+                        <option value="terrain">Terrain (Stamen)</option>
+                        <option value="topo">Topographic (OpenTopo)</option>
+                        <option value="dark">Dark (CartoDB)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="jdOperationMap" style="width: 100%; height: 400px; border-radius: 8px; border: 1px solid #dee2e6;"></div>
+                <div class="mt-2 text-muted small">
+                    <i class="fas fa-info-circle me-1"></i>
+                    Showing operation boundary from: <strong>{{ jd_operation_boundary_file.name }}</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <!-- Folder Contents -->
 <div class="row">
@@ -1145,6 +1213,184 @@ function refreshStats() {
             console.error('Error refreshing stats:', error);
         });
 }
+</script>
+{% endif %}
+
+<!-- John Deere Boundary Map Scripts -->
+{% if is_jd_field and jd_field_boundary_file or is_jd_operation and jd_operation_boundary_file %}
+<script src="https://cdn.jsdelivr.net/npm/ol@v8.1.0/dist/ol.js"></script>
+<script>
+// Define base map sources (shared function)
+function getBaseMapSource(type) {
+    switch(type) {
+        case 'osm':
+            return new ol.source.OSM();
+        case 'satellite':
+            return new ol.source.XYZ({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attributions: 'Tiles &copy; Esri'
+            });
+        case 'terrain':
+            return new ol.source.XYZ({
+                url: 'https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg',
+                attributions: 'Map tiles by Stamen Design'
+            });
+        case 'topo':
+            return new ol.source.XYZ({
+                url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+                attributions: 'Map data: OpenTopoMap (CC-BY-SA)'
+            });
+        case 'dark':
+            return new ol.source.XYZ({
+                url: 'https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
+                attributions: '&copy; CartoDB'
+            });
+        default:
+            return new ol.source.OSM();
+    }
+}
+
+// Generic function to create a boundary map
+function createBoundaryMap(targetId, spatialExtent, folderName, strokeColor) {
+    if (!spatialExtent || !spatialExtent.coordinates) {
+        console.error('No valid spatial extent found for boundary file');
+        document.getElementById(targetId).innerHTML = '<div class="text-center text-muted py-5"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><p>Could not load boundary map - no spatial extent available</p></div>';
+        return { map: null, baseLayer: null };
+    }
+    
+    // Extract coordinates from the envelope
+    const coords = spatialExtent.coordinates;
+    const minX = coords[0][0];
+    const minY = coords[0][1];
+    const maxX = coords[1][0];
+    const maxY = coords[1][1];
+    
+    console.log('Boundary extent for ' + targetId + ':', { minX, minY, maxX, maxY });
+    
+    // Transform coordinates from EPSG:4326 to EPSG:3857
+    const minCoord = ol.proj.fromLonLat([minX, minY]);
+    const maxCoord = ol.proj.fromLonLat([maxX, maxY]);
+    
+    const extent = [minCoord[0], minCoord[1], maxCoord[0], maxCoord[1]];
+    const centerX = (minCoord[0] + maxCoord[0]) / 2;
+    const centerY = (minCoord[1] + maxCoord[1]) / 2;
+    
+    // Create boundary polygon
+    const boundaryPolygon = new ol.geom.Polygon([[
+        [minCoord[0], minCoord[1]],
+        [maxCoord[0], minCoord[1]],
+        [maxCoord[0], maxCoord[1]],
+        [minCoord[0], maxCoord[1]],
+        [minCoord[0], minCoord[1]]
+    ]]);
+    
+    const boundaryFeature = new ol.Feature({
+        geometry: boundaryPolygon,
+        name: folderName + ' Boundary'
+    });
+    
+    // Style for the boundary polygon
+    const boundaryStyle = new ol.style.Style({
+        stroke: new ol.style.Stroke({
+            color: strokeColor,
+            width: 3
+        }),
+        fill: new ol.style.Fill({
+            color: strokeColor.replace(')', ', 0.1)').replace('rgb', 'rgba')
+        })
+    });
+    
+    boundaryFeature.setStyle(boundaryStyle);
+    
+    const vectorSource = new ol.source.Vector({
+        features: [boundaryFeature]
+    });
+    
+    const vectorLayer = new ol.layer.Vector({
+        source: vectorSource
+    });
+    
+    const baseLayer = new ol.layer.Tile({
+        source: new ol.source.OSM()
+    });
+    
+    const map = new ol.Map({
+        target: targetId,
+        layers: [baseLayer, vectorLayer],
+        view: new ol.View({
+            center: [centerX, centerY],
+            zoom: 14
+        }),
+        controls: ol.control.defaults.defaults().extend([
+            new ol.control.ScaleLine(),
+            new ol.control.FullScreen()
+        ])
+    });
+    
+    map.getView().fit(extent, {
+        padding: [50, 50, 50, 50],
+        maxZoom: 17
+    });
+    
+    console.log('Boundary map initialized for:', targetId);
+    return { map: map, baseLayer: baseLayer };
+}
+</script>
+{% endif %}
+
+<!-- John Deere Field Boundary Map Script -->
+{% if is_jd_field and jd_field_boundary_file %}
+<script>
+let jdFieldMap = null;
+let jdFieldBaseLayer = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    const result = createBoundaryMap(
+        'jdFieldMap',
+        {{ jd_field_boundary_file.spatial_extent|safe }},
+        '{{ folder.name }}',
+        '#d00000'
+    );
+    jdFieldMap = result.map;
+    jdFieldBaseLayer = result.baseLayer;
+    
+    const selector = document.getElementById('jdBaseMapSelector');
+    if (selector) {
+        selector.addEventListener('change', function() {
+            if (jdFieldBaseLayer) {
+                jdFieldBaseLayer.setSource(getBaseMapSource(this.value));
+            }
+        });
+    }
+});
+</script>
+{% endif %}
+
+<!-- John Deere Operation Boundary Map Script -->
+{% if is_jd_operation and jd_operation_boundary_file %}
+<script>
+let jdOperationMap = null;
+let jdOperationBaseLayer = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    const result = createBoundaryMap(
+        'jdOperationMap',
+        {{ jd_operation_boundary_file.spatial_extent|safe }},
+        '{{ folder.name }}',
+        '#28a745'
+    );
+    jdOperationMap = result.map;
+    jdOperationBaseLayer = result.baseLayer;
+    
+    const selector = document.getElementById('jdOpBaseMapSelector');
+    if (selector) {
+        selector.addEventListener('change', function() {
+            if (jdOperationBaseLayer) {
+                jdOperationBaseLayer.setSource(getBaseMapSource(this.value));
+            }
+        });
+    }
+});
 </script>
 {% endif %}
 
