@@ -169,7 +169,7 @@
                             </tr>
                             <tr>
                                 <th>Contents:</th>
-                                <td>{{ subfolders.count }} folders, {{ files.count }} files</td>
+                                <td>{{ total_subfolders|default:subfolders.count }} folders, {{ total_files|default:files.count }} files</td>
                             </tr>
                             <tr>
                                 <th>Owner:</th>
@@ -475,7 +475,7 @@
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">
                     <i class="fas fa-list me-2"></i>Contents
-                    <span class="text-muted">({{ subfolders.count }} folders, {{ files.count }} files)</span>
+                    <span class="text-muted">({{ total_subfolders|default:subfolders.count }} folders, {{ total_files|default:files.count }} files)</span>
                 </h5>
                 <div class="btn-group" role="group" aria-label="View toggle">
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="listViewBtn" onclick="toggleView('list')">
@@ -702,44 +702,58 @@
                 {% endif %}
                 
                 <!-- Pagination Controls -->
-                {% if page_obj and page_obj.num_pages > 1 %}
-                <div class="d-flex justify-content-between align-items-center mt-4">
-                    <div class="text-muted">
-                        Showing {{ page_obj.start_index }}-{{ page_obj.end_index }} of {{ total_items }} items
+                {% if page_obj and page_obj.paginator.num_pages > 1 %}
+                <div class="card bg-light mt-4">
+                    <div class="card-body py-3">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <div class="text-muted">
+                                <i class="fas fa-file-alt me-1"></i>
+                                Showing <strong>{{ page_obj.start_index }}-{{ page_obj.end_index }}</strong> of <strong>{{ total_items }}</strong> items
+                                <span class="ms-2 badge bg-secondary">Page {{ page_obj.number }} of {{ page_obj.num_pages }}</span>
+                            </div>
+                            <nav aria-label="Folder content pagination">
+                                <ul class="pagination mb-0">
+                                    {% if page_obj.has_previous %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page=1" title="First page">
+                                                <i class="fas fa-angle-double-left"></i>
+                                            </a>
+                                        </li>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page={{ page_obj.previous_page_number }}" title="Previous page">
+                                                <i class="fas fa-angle-left"></i> Prev
+                                            </a>
+                                        </li>
+                                    {% endif %}
+                                    
+                                    {% for num in page_obj.paginator.page_range %}
+                                        {% if page_obj.number == num %}
+                                            <li class="page-item active">
+                                                <span class="page-link">{{ num }}</span>
+                                            </li>
+                                        {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                                            <li class="page-item">
+                                                <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+                                            </li>
+                                        {% endif %}
+                                    {% endfor %}
+                                    
+                                    {% if page_obj.has_next %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page={{ page_obj.next_page_number }}" title="Next page">
+                                                Next <i class="fas fa-angle-right"></i>
+                                            </a>
+                                        </li>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}" title="Last page">
+                                                <i class="fas fa-angle-double-right"></i>
+                                            </a>
+                                        </li>
+                                    {% endif %}
+                                </ul>
+                            </nav>
+                        </div>
                     </div>
-                    <nav aria-label="Folder content pagination">
-                        <ul class="pagination mb-0">
-                            {% if page_obj.has_previous %}
-                                <li class="page-item">
-                                    <a class="page-link" href="?page=1">First</a>
-                                </li>
-                                <li class="page-item">
-                                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
-                                </li>
-                            {% endif %}
-                            
-                            {% for num in page_obj.paginator.page_range %}
-                                {% if page_obj.number == num %}
-                                    <li class="page-item active">
-                                        <span class="page-link">{{ num }}</span>
-                                    </li>
-                                {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
-                                    <li class="page-item">
-                                        <a class="page-link" href="?page={{ num }}">{{ num }}</a>
-                                    </li>
-                                {% endif %}
-                            {% endfor %}
-                            
-                            {% if page_obj.has_next %}
-                                <li class="page-item">
-                                    <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
-                                </li>
-                                <li class="page-item">
-                                    <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}">Last</a>
-                                </li>
-                            {% endif %}
-                        </ul>
-                    </nav>
                 </div>
                 {% endif %}
             </div>

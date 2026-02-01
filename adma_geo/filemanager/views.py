@@ -611,6 +611,8 @@ def folder_detail(request, folder_id):
         'can_edit': folder.owner == request.user,
         'page_obj': page_obj,
         'total_items': total_items,
+        'total_subfolders': total_subfolders,
+        'total_files': total_files,
         'is_jd_root': is_jd_root,
         'jd_all_field_boundaries': jd_all_field_boundaries,
         'is_jd_field': is_jd_field,
@@ -632,9 +634,52 @@ def public_folder_detail(request, folder_id):
     if request.user.is_authenticated and folder.owner == request.user:
         return redirect('filemanager:folder_detail', folder_id=folder_id)
     
-    # Get public subfolders and files
-    subfolders = folder.subfolders.filter(is_public=True)
-    files = folder.files.filter(is_public=True)
+    # Get public subfolders and files with pagination
+    subfolders_queryset = folder.subfolders.filter(is_public=True).order_by('name')
+    files_queryset = folder.files.filter(is_public=True).order_by('-created_at')
+    
+    # Pagination setup
+    page = request.GET.get('page', 1)
+    items_per_page = 100
+    
+    # Calculate total items
+    total_subfolders = subfolders_queryset.count()
+    total_files = files_queryset.count()
+    total_items = total_subfolders + total_files
+    
+    # Set up pagination
+    paginator = Paginator(range(total_items), items_per_page)
+    
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+    
+    # Calculate which items to show on this page
+    start_index = (page_obj.number - 1) * items_per_page
+    end_index = start_index + items_per_page
+    
+    # Get the actual items for this page
+    if start_index < total_subfolders:
+        # Page starts with subfolders
+        if end_index <= total_subfolders:
+            # Page contains only subfolders
+            subfolders = subfolders_queryset[start_index:end_index]
+            files = File.objects.none()
+        else:
+            # Page contains some subfolders and some files
+            subfolders = subfolders_queryset[start_index:]
+            files_start = 0
+            files_end = end_index - total_subfolders
+            files = files_queryset[files_start:files_end]
+    else:
+        # Page starts with files
+        subfolders = Folder.objects.none()
+        files_start = start_index - total_subfolders
+        files_end = files_start + items_per_page
+        files = files_queryset[files_start:files_end]
     
     # Check if this is the John Deere root folder
     is_jd_root = False
@@ -800,6 +845,10 @@ def public_folder_detail(request, folder_id):
         'breadcrumbs': folder.get_public_breadcrumbs(),  # Use public breadcrumbs
         'can_edit': False,  # Public users can't edit
         'is_public_view': True,  # Flag to adjust breadcrumbs and navigation
+        'page_obj': page_obj,
+        'total_items': total_items,
+        'total_subfolders': total_subfolders,
+        'total_files': total_files,
         'is_jd_root': is_jd_root,
         'jd_all_field_boundaries': jd_all_field_boundaries,
         'is_jd_field': is_jd_field,
