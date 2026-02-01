@@ -487,6 +487,44 @@ def folder_detail(request, folder_id):
                     is_spatial=True
                 ).first()
     
+    # Check if this is a Realm5 device folder
+    is_realm5_device = False
+    realm5_all_data = None
+    realm5_all_variables = None
+    
+    if folder.is_third_party and folder.third_party_source == 'realm5':
+        # Check if parent is the Realm5 root folder (this would make it a device folder)
+        if folder.parent and folder.parent.name == 'realm5':
+            is_realm5_device = True
+            # Look for all.json file in this folder
+            all_json_file = File.objects.filter(folder=folder, name='all.json').first()
+            if all_json_file and all_json_file.file_size < 5 * 1024 * 1024:  # Max 5MB
+                try:
+                    with all_json_file.file.open('r') as f:
+                        all_json_data = json.load(f)
+                    
+                    # Check if it has the expected structure
+                    if 'daily_averages' in all_json_data and isinstance(all_json_data['daily_averages'], list):
+                        daily_averages = all_json_data['daily_averages']
+                        if daily_averages:
+                            # Get variables from the data
+                            first_avg = daily_averages[0]
+                            realm5_all_variables = [key for key in first_avg.keys() 
+                                                   if key not in ('date', 'observation_count') 
+                                                   and isinstance(first_avg.get(key), (int, float))]
+                            
+                            realm5_all_data = {
+                                'device_name': all_json_data.get('device_name'),
+                                'dev_eui': all_json_data.get('dev_eui'),
+                                'device_type': all_json_data.get('device_type'),
+                                'total_days': all_json_data.get('total_days', len(daily_averages)),
+                                'date_range': all_json_data.get('date_range', {}),
+                                'daily_averages': daily_averages,
+                                'variables': realm5_all_variables,
+                            }
+                except Exception as e:
+                    print(f"Error loading all.json for Realm5 device: {e}")
+    
     return render(request, 'filemanager/folder_detail.html', {
         'folder': folder,
         'subfolders': subfolders,
@@ -499,6 +537,9 @@ def folder_detail(request, folder_id):
         'jd_field_boundary_file': jd_field_boundary_file,
         'is_jd_operation': is_jd_operation,
         'jd_operation_boundary_file': jd_operation_boundary_file,
+        'is_realm5_device': is_realm5_device,
+        'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
+        'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
     })
 
 def public_folder_detail(request, folder_id):
@@ -552,6 +593,44 @@ def public_folder_detail(request, folder_id):
                     is_public=True
                 ).first()
     
+    # Check if this is a Realm5 device folder
+    is_realm5_device = False
+    realm5_all_data = None
+    realm5_all_variables = None
+    
+    if folder.is_third_party and folder.third_party_source == 'realm5':
+        # Check if parent is the Realm5 root folder (this would make it a device folder)
+        if folder.parent and folder.parent.name == 'realm5':
+            is_realm5_device = True
+            # Look for all.json file in this folder
+            all_json_file = File.objects.filter(folder=folder, name='all.json', is_public=True).first()
+            if all_json_file and all_json_file.file_size < 5 * 1024 * 1024:  # Max 5MB
+                try:
+                    with all_json_file.file.open('r') as f:
+                        all_json_data = json.load(f)
+                    
+                    # Check if it has the expected structure
+                    if 'daily_averages' in all_json_data and isinstance(all_json_data['daily_averages'], list):
+                        daily_averages = all_json_data['daily_averages']
+                        if daily_averages:
+                            # Get variables from the data
+                            first_avg = daily_averages[0]
+                            realm5_all_variables = [key for key in first_avg.keys() 
+                                                   if key not in ('date', 'observation_count') 
+                                                   and isinstance(first_avg.get(key), (int, float))]
+                            
+                            realm5_all_data = {
+                                'device_name': all_json_data.get('device_name'),
+                                'dev_eui': all_json_data.get('dev_eui'),
+                                'device_type': all_json_data.get('device_type'),
+                                'total_days': all_json_data.get('total_days', len(daily_averages)),
+                                'date_range': all_json_data.get('date_range', {}),
+                                'daily_averages': daily_averages,
+                                'variables': realm5_all_variables,
+                            }
+                except Exception as e:
+                    print(f"Error loading all.json for Realm5 device: {e}")
+    
     # Reuse the same template as private folder detail, but with public view context
     return render(request, 'filemanager/folder_detail.html', {
         'folder': folder,
@@ -564,6 +643,9 @@ def public_folder_detail(request, folder_id):
         'jd_field_boundary_file': jd_field_boundary_file,
         'is_jd_operation': is_jd_operation,
         'jd_operation_boundary_file': jd_operation_boundary_file,
+        'is_realm5_device': is_realm5_device,
+        'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
+        'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
     })
 
 @login_required

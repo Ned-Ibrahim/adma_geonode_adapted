@@ -299,6 +299,65 @@
 </div>
 {% endif %}
 
+<!-- Realm5 Device Daily Averages Visualization Panel -->
+{% if is_realm5_device and realm5_all_data %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-chart-area me-2"></i>Weather Station Daily Averages
+                </h5>
+            </div>
+            <div class="card-body">
+                <!-- Variable Selection -->
+                <div class="row mb-3">
+                    <div class="col-md-9">
+                        <label class="form-label">Select Variables to Visualize:</label>
+                        <div id="realm5DeviceVariableCheckboxes" class="d-flex flex-wrap gap-2">
+                            <!-- Checkboxes will be populated by JavaScript -->
+                        </div>
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <button id="generateRealm5DeviceChart" class="btn btn-primary">
+                            <i class="fas fa-chart-line me-2"></i>Generate Chart
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Chart Container -->
+                <div id="realm5DeviceChartContainer" class="border rounded p-3 bg-white" style="min-height: 400px;">
+                    <canvas id="realm5DeviceChart" width="800" height="400"></canvas>
+                    <div id="realm5DeviceChartPlaceholder" class="text-center text-muted py-5">
+                        <i class="fas fa-chart-area fa-3x mb-3"></i>
+                        <p>Select one or more variables above and click "Generate Chart" to visualize daily average trends</p>
+                    </div>
+                </div>
+                
+                <!-- Data Summary -->
+                <div class="row mt-3">
+                    <div class="col-md-4">
+                        <small class="text-muted">
+                            <i class="fas fa-calendar-alt me-1"></i>Date Range: <span id="realm5DeviceDateRange"></span>
+                        </small>
+                    </div>
+                    <div class="col-md-4 text-md-center">
+                        <small class="text-muted">
+                            <i class="fas fa-calendar-day me-1"></i>Total Days: <span id="realm5DeviceTotalDays"></span>
+                        </small>
+                    </div>
+                    <div class="col-md-4 text-md-end">
+                        <small class="text-muted">
+                            <i class="fas fa-thermometer-half me-1"></i>Device: <span id="realm5DeviceName"></span>
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- Folder Contents -->
 <div class="row">
     <div class="col-12">
@@ -1391,6 +1450,216 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+</script>
+{% endif %}
+
+<!-- Realm5 Device Daily Averages Chart Script -->
+{% if is_realm5_device and realm5_all_data %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+// Realm5 device data
+const realm5DeviceData = {{ realm5_all_data|safe }};
+const realm5DeviceVariables = {{ realm5_all_variables|safe }};
+
+// Color palette for multiple variables
+const realm5ChartColors = [
+    { border: '#d00000', background: 'rgba(208, 0, 0, 0.1)' },
+    { border: '#0077b6', background: 'rgba(0, 119, 182, 0.1)' },
+    { border: '#00a651', background: 'rgba(0, 166, 81, 0.1)' },
+    { border: '#ff6b00', background: 'rgba(255, 107, 0, 0.1)' },
+    { border: '#8338ec', background: 'rgba(131, 56, 236, 0.1)' },
+    { border: '#ff006e', background: 'rgba(255, 0, 110, 0.1)' },
+    { border: '#3a86ff', background: 'rgba(58, 134, 255, 0.1)' },
+    { border: '#fb5607', background: 'rgba(251, 86, 7, 0.1)' },
+];
+
+document.addEventListener('DOMContentLoaded', function() {
+    initializeRealm5DeviceChart();
+    // Auto-generate chart with temperature (or first variable) on page load
+    setTimeout(function() {
+        generateRealm5DeviceChart();
+    }, 100);
+});
+
+function initializeRealm5DeviceChart() {
+    if (!realm5DeviceData || !realm5DeviceVariables) return;
+    
+    // Populate variable checkboxes
+    const checkboxContainer = document.getElementById('realm5DeviceVariableCheckboxes');
+    checkboxContainer.innerHTML = '';
+    
+    realm5DeviceVariables.forEach((variable, index) => {
+        const div = document.createElement('div');
+        div.className = 'form-check form-check-inline';
+        
+        const checkbox = document.createElement('input');
+        checkbox.className = 'form-check-input';
+        checkbox.type = 'checkbox';
+        checkbox.id = `device_var_${variable}`;
+        checkbox.value = variable;
+        // Pre-select temperature by default, or first variable if temperature not available
+        if (variable === 'temperature') {
+            checkbox.checked = true;
+        } else if (index === 0 && !realm5DeviceVariables.includes('temperature')) {
+            checkbox.checked = true;
+        }
+        
+        const label = document.createElement('label');
+        label.className = 'form-check-label';
+        label.htmlFor = `device_var_${variable}`;
+        label.textContent = formatDeviceVariableName(variable);
+        
+        div.appendChild(checkbox);
+        div.appendChild(label);
+        checkboxContainer.appendChild(div);
+    });
+    
+    // Update summary info
+    const dateRange = realm5DeviceData.date_range || {};
+    const dateRangeText = dateRange.start && dateRange.end 
+        ? `${dateRange.start} to ${dateRange.end}` 
+        : 'N/A';
+    document.getElementById('realm5DeviceDateRange').textContent = dateRangeText;
+    document.getElementById('realm5DeviceTotalDays').textContent = realm5DeviceData.total_days || 'N/A';
+    document.getElementById('realm5DeviceName').textContent = realm5DeviceData.device_name || realm5DeviceData.dev_eui || 'N/A';
+    
+    // Add event listener for chart generation
+    document.getElementById('generateRealm5DeviceChart').addEventListener('click', generateRealm5DeviceChart);
+    
+    // Hide chart initially
+    document.getElementById('realm5DeviceChart').style.display = 'none';
+}
+
+function formatDeviceVariableName(varName) {
+    // Convert snake_case to Title Case
+    return varName.split('_').map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+}
+
+function generateRealm5DeviceChart() {
+    // Get selected variables
+    const selectedVars = [];
+    realm5DeviceVariables.forEach(variable => {
+        const checkbox = document.getElementById(`device_var_${variable}`);
+        if (checkbox && checkbox.checked) {
+            selectedVars.push(variable);
+        }
+    });
+    
+    if (selectedVars.length === 0) {
+        alert('Please select at least one variable to visualize');
+        return;
+    }
+    
+    // Prepare datasets
+    const datasets = selectedVars.map((variable, index) => {
+        const color = realm5ChartColors[index % realm5ChartColors.length];
+        
+        const data = realm5DeviceData.daily_averages.map(avg => {
+            // Parse date string (format: YYYY-MM-DD)
+            const dateStr = avg.date;
+            const date = new Date(dateStr + 'T12:00:00'); // Add noon time to avoid timezone issues
+            return {
+                x: date,
+                y: avg[variable]
+            };
+        }).filter(point => point.x !== null && !isNaN(point.y) && point.y !== undefined);
+        
+        // Sort by date
+        data.sort((a, b) => a.x - b.x);
+        
+        return {
+            label: formatDeviceVariableName(variable),
+            data: data,
+            borderColor: color.border,
+            backgroundColor: color.background,
+            borderWidth: 2,
+            fill: false,
+            tension: 0.2,
+            pointRadius: 1,
+            pointHoverRadius: 4
+        };
+    });
+    
+    // Hide placeholder and show chart
+    document.getElementById('realm5DeviceChartPlaceholder').style.display = 'none';
+    const canvas = document.getElementById('realm5DeviceChart');
+    canvas.style.display = 'block';
+    
+    // Destroy existing chart if it exists
+    if (window.realm5DeviceChartInstance) {
+        window.realm5DeviceChartInstance.destroy();
+    }
+    
+    // Create new chart
+    const ctx = canvas.getContext('2d');
+    window.realm5DeviceChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: 'day',
+                        displayFormats: {
+                            day: 'MMM d',
+                            week: 'MMM d',
+                            month: 'MMM yyyy'
+                        },
+                        tooltipFormat: 'MMM d, yyyy'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Date'
+                    }
+                },
+                y: {
+                    title: {
+                        display: true,
+                        text: selectedVars.length === 1 ? formatDeviceVariableName(selectedVars[0]) : 'Value'
+                    }
+                }
+            },
+            plugins: {
+                title: {
+                    display: true,
+                    text: `Daily Averages - ${realm5DeviceData.device_name || realm5DeviceData.dev_eui}`
+                },
+                legend: {
+                    display: selectedVars.length > 1,
+                    position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        title: function(context) {
+                            const date = new Date(context[0].raw.x);
+                            return date.toLocaleDateString('en-US', { 
+                                year: 'numeric',
+                                month: 'short', 
+                                day: 'numeric'
+                            });
+                        },
+                        label: function(context) {
+                            const value = context.raw.y;
+                            return `${context.dataset.label}: ${value.toFixed(2)}`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
 </script>
 {% endif %}
 
