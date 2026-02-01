@@ -479,6 +479,7 @@ def folder_detail(request, folder_id):
                     if boundary_file and boundary_file.spatial_extent:
                         jd_all_field_boundaries.append({
                             'name': field_folder.name,
+                            'folder_id': str(field_folder.id),
                             'file': boundary_file,
                             'extent': boundary_file.spatial_extent,
                         })
@@ -610,6 +611,7 @@ def public_folder_detail(request, folder_id):
                     if boundary_file and boundary_file.spatial_extent:
                         jd_all_field_boundaries.append({
                             'name': field_folder.name,
+                            'folder_id': str(field_folder.id),
                             'file': boundary_file,
                             'extent': boundary_file.spatial_extent,
                         })
