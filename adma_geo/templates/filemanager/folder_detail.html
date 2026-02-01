@@ -3,8 +3,8 @@
 {% block title %}{{ folder.name }} - ADMA{% endblock %}
 
 {% block extra_css %}
-<!-- OpenLayers CSS for John Deere boundary map -->
-{% if is_jd_root and jd_all_field_boundaries or is_jd_field and jd_field_boundary_file or is_jd_operation and jd_operation_boundary_file %}
+<!-- OpenLayers CSS for John Deere and Realm5 maps -->
+{% if is_jd_root and jd_all_field_boundaries or is_jd_field and jd_field_boundary_file or is_jd_operation and jd_operation_boundary_file or is_realm5_root and realm5_device_locations or is_realm5_device and realm5_device_locations %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v8.1.0/ol.css">
 {% endif %}
 <style>
@@ -331,6 +331,77 @@
                 <div class="mt-2 text-muted small">
                     <i class="fas fa-info-circle me-1"></i>
                     Showing operation boundary from: <strong>{{ jd_operation_boundary_file.name }}</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Realm5 Root Folder - All Devices Map Panel -->
+{% if is_realm5_root and realm5_device_locations %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-cloud-sun me-2"></i>Weather Station Locations
+                    <span class="badge bg-info ms-2">{{ realm5_device_locations|length }} stations</span>
+                </h5>
+                <div class="d-flex align-items-center">
+                    <label for="realm5BaseMapSelector" class="me-2 mb-0 small text-muted">Base Map:</label>
+                    <select id="realm5BaseMapSelector" class="form-select form-select-sm" style="width: auto;">
+                        <option value="osm" selected>OpenStreetMap</option>
+                        <option value="satellite">Satellite (Esri)</option>
+                        <option value="terrain">Terrain (Stamen)</option>
+                        <option value="topo">Topographic (OpenTopo)</option>
+                        <option value="dark">Dark (CartoDB)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="realm5RootMap" style="width: 100%; height: 450px; border-radius: 8px; border: 1px solid #dee2e6;"></div>
+                <div class="mt-3">
+                    <h6 class="text-muted mb-2"><i class="fas fa-list me-1"></i>Weather Stations:</h6>
+                    <div class="d-flex flex-wrap gap-2">
+                        {% for device in realm5_device_locations %}
+                        <span class="badge bg-info">
+                            <i class="fas fa-broadcast-tower me-1"></i>{{ device.name }}
+                        </span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Realm5 Device Location Map Panel -->
+{% if is_realm5_device and realm5_device_locations %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-map-marker-alt me-2"></i>Device Location
+                </h5>
+                <div class="d-flex align-items-center">
+                    <label for="realm5DeviceBaseMapSelector" class="me-2 mb-0 small text-muted">Base Map:</label>
+                    <select id="realm5DeviceBaseMapSelector" class="form-select form-select-sm" style="width: auto;">
+                        <option value="osm" selected>OpenStreetMap</option>
+                        <option value="satellite">Satellite (Esri)</option>
+                        <option value="terrain">Terrain (Stamen)</option>
+                        <option value="topo">Topographic (OpenTopo)</option>
+                        <option value="dark">Dark (CartoDB)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="realm5DeviceLocationMap" style="width: 100%; height: 350px; border-radius: 8px; border: 1px solid #dee2e6;"></div>
+                <div class="mt-2 text-muted small">
+                    <i class="fas fa-info-circle me-1"></i>
+                    Location: <strong>{{ realm5_device_locations.0.lat }}°N, {{ realm5_device_locations.0.lon|slice:"1:" }}°W</strong>
                 </div>
             </div>
         </div>
@@ -1314,8 +1385,8 @@ function refreshStats() {
 </script>
 {% endif %}
 
-<!-- John Deere Boundary Map Scripts -->
-{% if is_jd_root and jd_all_field_boundaries or is_jd_field and jd_field_boundary_file or is_jd_operation and jd_operation_boundary_file %}
+<!-- John Deere and Realm5 Map Scripts -->
+{% if is_jd_root and jd_all_field_boundaries or is_jd_field and jd_field_boundary_file or is_jd_operation and jd_operation_boundary_file or is_realm5_root and realm5_device_locations or is_realm5_device and realm5_device_locations %}
 <script src="https://cdn.jsdelivr.net/npm/ol@v8.1.0/dist/ol.js"></script>
 <script>
 // Define base map sources (shared function)
@@ -1728,6 +1799,270 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+});
+</script>
+{% endif %}
+
+<!-- Realm5 Root Folder - All Devices Map Script -->
+{% if is_realm5_root and realm5_device_locations %}
+<script>
+let realm5RootMap = null;
+let realm5RootBaseLayer = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Device locations from Django template
+    const deviceLocations = [
+        {% for device in realm5_device_locations %}
+        {
+            name: "{{ device.name|escapejs }}",
+            folder_id: "{{ device.folder_id }}",
+            lat: {{ device.lat }},
+            lon: {{ device.lon }}
+        }{% if not forloop.last %},{% endif %}
+        {% endfor %}
+    ];
+    
+    // Check if this is a public view
+    const isPublicView = {% if is_public_view %}true{% else %}false{% endif %};
+    
+    if (deviceLocations.length === 0) {
+        document.getElementById('realm5RootMap').innerHTML = '<div class="text-center text-muted py-5"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><p>No device locations available</p></div>';
+        return;
+    }
+    
+    // Define colors for different devices
+    const colors = ['#17a2b8', '#28a745', '#ffc107', '#dc3545', '#6f42c1'];
+    
+    // Create vector source for markers
+    const vectorSource = new ol.source.Vector();
+    let combinedExtent = null;
+    
+    deviceLocations.forEach((device, index) => {
+        // Transform coordinates from EPSG:4326 to EPSG:3857
+        const coord = ol.proj.fromLonLat([device.lon, device.lat]);
+        
+        // Create point feature for the marker
+        const pointFeature = new ol.Feature({
+            geometry: new ol.geom.Point(coord),
+            name: device.name,
+            folderId: device.folder_id
+        });
+        
+        const color = colors[index % colors.length];
+        
+        // Style for the marker with text label
+        pointFeature.setStyle(new ol.style.Style({
+            image: new ol.style.Circle({
+                radius: 12,
+                fill: new ol.style.Fill({ color: color }),
+                stroke: new ol.style.Stroke({ color: '#fff', width: 3 })
+            }),
+            text: new ol.style.Text({
+                text: device.name,
+                font: 'bold 12px Arial',
+                fill: new ol.style.Fill({ color: '#333' }),
+                stroke: new ol.style.Stroke({ color: '#fff', width: 3 }),
+                offsetY: -25,
+                overflow: true
+            })
+        }));
+        
+        // Store default style for hover reset
+        pointFeature.set('defaultStyle', pointFeature.getStyle());
+        pointFeature.set('color', color);
+        
+        vectorSource.addFeature(pointFeature);
+        
+        // Update combined extent
+        if (combinedExtent === null) {
+            combinedExtent = [coord[0], coord[1], coord[0], coord[1]];
+        } else {
+            combinedExtent[0] = Math.min(combinedExtent[0], coord[0]);
+            combinedExtent[1] = Math.min(combinedExtent[1], coord[1]);
+            combinedExtent[2] = Math.max(combinedExtent[2], coord[0]);
+            combinedExtent[3] = Math.max(combinedExtent[3], coord[1]);
+        }
+    });
+    
+    // Add padding to extent
+    const padding = 5000; // meters
+    combinedExtent[0] -= padding;
+    combinedExtent[1] -= padding;
+    combinedExtent[2] += padding;
+    combinedExtent[3] += padding;
+    
+    const vectorLayer = new ol.layer.Vector({
+        source: vectorSource
+    });
+    
+    realm5RootBaseLayer = new ol.layer.Tile({
+        source: new ol.source.OSM()
+    });
+    
+    realm5RootMap = new ol.Map({
+        target: 'realm5RootMap',
+        layers: [realm5RootBaseLayer, vectorLayer],
+        view: new ol.View({
+            center: [(combinedExtent[0] + combinedExtent[2]) / 2, (combinedExtent[1] + combinedExtent[3]) / 2],
+            zoom: 10
+        }),
+        controls: ol.control.defaults.defaults().extend([
+            new ol.control.ScaleLine(),
+            new ol.control.FullScreen()
+        ])
+    });
+    
+    realm5RootMap.getView().fit(combinedExtent, {
+        padding: [50, 50, 50, 50],
+        maxZoom: 14
+    });
+    
+    // Add click interaction to navigate to device folder
+    realm5RootMap.on('click', function(evt) {
+        const feature = realm5RootMap.forEachFeatureAtPixel(evt.pixel, function(feature) {
+            return feature;
+        });
+        
+        if (feature) {
+            const folderId = feature.get('folderId');
+            if (folderId) {
+                // Navigate to the device folder
+                const baseUrl = isPublicView ? '/public/folder/' : '/folder/';
+                window.location.href = baseUrl + folderId + '/';
+            }
+        }
+    });
+    
+    // Change cursor to pointer when hovering over a marker
+    realm5RootMap.on('pointermove', function(evt) {
+        const pixel = realm5RootMap.getEventPixel(evt.originalEvent);
+        const hit = realm5RootMap.hasFeatureAtPixel(pixel);
+        realm5RootMap.getTargetElement().style.cursor = hit ? 'pointer' : '';
+        
+        // Reset all features to default style
+        vectorSource.getFeatures().forEach(function(feature) {
+            feature.setStyle(feature.get('defaultStyle'));
+        });
+        
+        // Highlight hovered feature
+        if (hit) {
+            const feature = realm5RootMap.forEachFeatureAtPixel(pixel, function(feature) {
+                return feature;
+            });
+            if (feature) {
+                const deviceName = feature.get('name');
+                const color = feature.get('color');
+                // Highlighted style with larger marker
+                feature.setStyle(new ol.style.Style({
+                    image: new ol.style.Circle({
+                        radius: 16,
+                        fill: new ol.style.Fill({ color: color }),
+                        stroke: new ol.style.Stroke({ color: '#fff', width: 4 })
+                    }),
+                    text: new ol.style.Text({
+                        text: deviceName + '\n(Click to open)',
+                        font: 'bold 12px Arial',
+                        fill: new ol.style.Fill({ color: '#333' }),
+                        stroke: new ol.style.Stroke({ color: '#fff', width: 3 }),
+                        offsetY: -30,
+                        overflow: true
+                    })
+                }));
+            }
+        }
+    });
+    
+    // Base map selector
+    const selector = document.getElementById('realm5BaseMapSelector');
+    if (selector) {
+        selector.addEventListener('change', function() {
+            if (realm5RootBaseLayer) {
+                realm5RootBaseLayer.setSource(getBaseMapSource(this.value));
+            }
+        });
+    }
+    
+    console.log('Realm5 device locations map initialized with', deviceLocations.length, 'devices');
+});
+</script>
+{% endif %}
+
+<!-- Realm5 Device Location Map Script (for individual device pages) -->
+{% if is_realm5_device and realm5_device_locations %}
+<script>
+let realm5DeviceLocationMap = null;
+let realm5DeviceLocationBaseLayer = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Device location from Django template
+    const deviceLocation = {
+        name: "{{ realm5_device_locations.0.name|escapejs }}",
+        lat: {{ realm5_device_locations.0.lat }},
+        lon: {{ realm5_device_locations.0.lon }}
+    };
+    
+    // Transform coordinates from EPSG:4326 to EPSG:3857
+    const coord = ol.proj.fromLonLat([deviceLocation.lon, deviceLocation.lat]);
+    
+    // Create point feature for the marker
+    const pointFeature = new ol.Feature({
+        geometry: new ol.geom.Point(coord),
+        name: deviceLocation.name
+    });
+    
+    // Style for the marker with text label
+    pointFeature.setStyle(new ol.style.Style({
+        image: new ol.style.Circle({
+            radius: 14,
+            fill: new ol.style.Fill({ color: '#17a2b8' }),
+            stroke: new ol.style.Stroke({ color: '#fff', width: 3 })
+        }),
+        text: new ol.style.Text({
+            text: deviceLocation.name,
+            font: 'bold 14px Arial',
+            fill: new ol.style.Fill({ color: '#333' }),
+            stroke: new ol.style.Stroke({ color: '#fff', width: 3 }),
+            offsetY: -30,
+            overflow: true
+        })
+    }));
+    
+    const vectorSource = new ol.source.Vector({
+        features: [pointFeature]
+    });
+    
+    const vectorLayer = new ol.layer.Vector({
+        source: vectorSource
+    });
+    
+    realm5DeviceLocationBaseLayer = new ol.layer.Tile({
+        source: new ol.source.OSM()
+    });
+    
+    realm5DeviceLocationMap = new ol.Map({
+        target: 'realm5DeviceLocationMap',
+        layers: [realm5DeviceLocationBaseLayer, vectorLayer],
+        view: new ol.View({
+            center: coord,
+            zoom: 14
+        }),
+        controls: ol.control.defaults.defaults().extend([
+            new ol.control.ScaleLine(),
+            new ol.control.FullScreen()
+        ])
+    });
+    
+    // Base map selector
+    const selector = document.getElementById('realm5DeviceBaseMapSelector');
+    if (selector) {
+        selector.addEventListener('change', function() {
+            if (realm5DeviceLocationBaseLayer) {
+                realm5DeviceLocationBaseLayer.setSource(getBaseMapSource(this.value));
+            }
+        });
+    }
+    
+    console.log('Realm5 device location map initialized for:', deviceLocation.name);
 });
 </script>
 {% endif %}

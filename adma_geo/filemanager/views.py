@@ -512,15 +512,68 @@ def folder_detail(request, folder_id):
                     is_spatial=True
                 ).first()
     
+    # Check if this is the Realm5 root folder
+    is_realm5_root = False
+    realm5_device_locations = []
+    
+    # Device location mapping (latitude, longitude)
+    REALM5_DEVICE_LOCATIONS = {
+        'Farm Shop Weatherstation': (41.176062, -96.471528),
+        'Entomology Weather Station': (41.163352, -96.498613),
+        'Cow/Calf Weather Station': (41.132303, -96.464161),
+    }
+    
     # Check if this is a Realm5 device folder
     is_realm5_device = False
     realm5_all_data = None
     realm5_all_variables = None
     
     if folder.is_third_party and folder.third_party_source == 'realm5':
+        # Check if this IS the Realm5 root folder
+        if folder.parent is None and folder.name == 'realm5':
+            is_realm5_root = True
+            # Collect all device folders with their locations
+            for device_folder in folder.subfolders.all():
+                device_name = device_folder.name
+                # Try to match device name with known locations
+                location = REALM5_DEVICE_LOCATIONS.get(device_name)
+                if not location:
+                    # Try partial match
+                    for known_name, coords in REALM5_DEVICE_LOCATIONS.items():
+                        if known_name.lower() in device_name.lower() or device_name.lower() in known_name.lower():
+                            location = coords
+                            break
+                
+                if location:
+                    realm5_device_locations.append({
+                        'name': device_name,
+                        'folder_id': str(device_folder.id),
+                        'lat': location[0],
+                        'lon': location[1],
+                    })
+        
         # Check if parent is the Realm5 root folder (this would make it a device folder)
-        if folder.parent and folder.parent.name == 'realm5':
+        elif folder.parent and folder.parent.name == 'realm5':
             is_realm5_device = True
+            
+            # Get device location for the map
+            device_name = folder.name
+            device_location = REALM5_DEVICE_LOCATIONS.get(device_name)
+            if not device_location:
+                # Try partial match
+                for known_name, coords in REALM5_DEVICE_LOCATIONS.items():
+                    if known_name.lower() in device_name.lower() or device_name.lower() in known_name.lower():
+                        device_location = coords
+                        break
+            
+            if device_location:
+                realm5_device_locations.append({
+                    'name': device_name,
+                    'folder_id': str(folder.id),
+                    'lat': device_location[0],
+                    'lon': device_location[1],
+                })
+            
             # Look for all.json file in this folder
             all_json_file = File.objects.filter(folder=folder, name='all.json').first()
             if all_json_file and all_json_file.file_size < 5 * 1024 * 1024:  # Max 5MB
@@ -564,6 +617,8 @@ def folder_detail(request, folder_id):
         'jd_field_boundary_file': jd_field_boundary_file,
         'is_jd_operation': is_jd_operation,
         'jd_operation_boundary_file': jd_operation_boundary_file,
+        'is_realm5_root': is_realm5_root,
+        'realm5_device_locations': realm5_device_locations,
         'is_realm5_device': is_realm5_device,
         'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
         'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
@@ -646,15 +701,68 @@ def public_folder_detail(request, folder_id):
                     is_public=True
                 ).first()
     
+    # Check if this is the Realm5 root folder
+    is_realm5_root = False
+    realm5_device_locations = []
+    
+    # Device location mapping (latitude, longitude)
+    REALM5_DEVICE_LOCATIONS = {
+        'Farm Shop Weatherstation': (41.176062, -96.471528),
+        'Entomology Weather Station': (41.163352, -96.498613),
+        'Cow/Calf Weather Station': (41.132303, -96.464161),
+    }
+    
     # Check if this is a Realm5 device folder
     is_realm5_device = False
     realm5_all_data = None
     realm5_all_variables = None
     
     if folder.is_third_party and folder.third_party_source == 'realm5':
+        # Check if this IS the Realm5 root folder
+        if folder.parent is None and folder.name == 'realm5':
+            is_realm5_root = True
+            # Collect all device folders with their locations (public only)
+            for device_folder in folder.subfolders.filter(is_public=True):
+                device_name = device_folder.name
+                # Try to match device name with known locations
+                location = REALM5_DEVICE_LOCATIONS.get(device_name)
+                if not location:
+                    # Try partial match
+                    for known_name, coords in REALM5_DEVICE_LOCATIONS.items():
+                        if known_name.lower() in device_name.lower() or device_name.lower() in known_name.lower():
+                            location = coords
+                            break
+                
+                if location:
+                    realm5_device_locations.append({
+                        'name': device_name,
+                        'folder_id': str(device_folder.id),
+                        'lat': location[0],
+                        'lon': location[1],
+                    })
+        
         # Check if parent is the Realm5 root folder (this would make it a device folder)
-        if folder.parent and folder.parent.name == 'realm5':
+        elif folder.parent and folder.parent.name == 'realm5':
             is_realm5_device = True
+            
+            # Get device location for the map
+            device_name = folder.name
+            device_location = REALM5_DEVICE_LOCATIONS.get(device_name)
+            if not device_location:
+                # Try partial match
+                for known_name, coords in REALM5_DEVICE_LOCATIONS.items():
+                    if known_name.lower() in device_name.lower() or device_name.lower() in known_name.lower():
+                        device_location = coords
+                        break
+            
+            if device_location:
+                realm5_device_locations.append({
+                    'name': device_name,
+                    'folder_id': str(folder.id),
+                    'lat': device_location[0],
+                    'lon': device_location[1],
+                })
+            
             # Look for all.json file in this folder
             all_json_file = File.objects.filter(folder=folder, name='all.json', is_public=True).first()
             if all_json_file and all_json_file.file_size < 5 * 1024 * 1024:  # Max 5MB
@@ -698,6 +806,8 @@ def public_folder_detail(request, folder_id):
         'jd_field_boundary_file': jd_field_boundary_file,
         'is_jd_operation': is_jd_operation,
         'jd_operation_boundary_file': jd_operation_boundary_file,
+        'is_realm5_root': is_realm5_root,
+        'realm5_device_locations': realm5_device_locations,
         'is_realm5_device': is_realm5_device,
         'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
         'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
