@@ -1237,6 +1237,7 @@ def sync_realm5_task(self):
                 owner=owner
             ).first()
             
+            found_by_third_party_id = False
             if not device_folder:
                 # Also check by third_party_id (in case folder was created with old naming)
                 device_folder = Folder.objects.filter(
@@ -1244,6 +1245,8 @@ def sync_realm5_task(self):
                     parent=realm5_folder,
                     owner=owner
                 ).first()
+                if device_folder:
+                    found_by_third_party_id = True
             
             if not device_folder:
                 # Create new folder for this weather station using friendly_name
@@ -1258,6 +1261,12 @@ def sync_realm5_task(self):
                 )
                 results['folders_created'] += 1
                 logger.info(f"Created folder for weather station: {folder_name} (dev_eui: {dev_eui})")
+            elif found_by_third_party_id and device_folder.name != folder_name:
+                # Folder was found by third_party_id but has old name - update it to friendly_name
+                old_name = device_folder.name
+                device_folder.name = folder_name
+                device_folder.save(update_fields=['name'])
+                logger.info(f"Renamed folder from '{old_name}' to '{folder_name}' (dev_eui: {dev_eui})")
             
             try:
                 # Iterate from SYNC_START_DATE to yesterday, fetching observations day by day
