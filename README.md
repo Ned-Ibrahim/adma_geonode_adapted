@@ -1,402 +1,329 @@
-# Adma_Geonode_Project
+# ADMA - Agricultural Data Management & Analytics
 
-GeoNode template project. Generates a django project with GeoNode support.
+A comprehensive web-based platform for managing, visualizing, and analyzing agricultural geospatial data. Built on Django with GeoServer integration for advanced GIS capabilities.
 
 ## Table of Contents
 
--  [Quick Docker Start](#quick-docker-start)
--  [Developer Workshop](#developer-workshop)
--  [Create a custom project](#create-a-custom-project)
--  [Start your server using Docker](#start-your-server-using-docker)
--  [Run the instance in development mode](#run-the-instance-in-development-mode)
--  [Run the instance on a public site](#run-the-instance-on-a-public-site)
--  [Stop the Docker Images](#stop-the-docker-images)
--  [Backup and Restore from Docker Images](#backup-and-restore-the-docker-images)
--  [Recommended: Track your changes](#recommended-track-your-changes)
--  [Hints: Configuring `requirements.txt`](#hints-configuring-requirementstxt)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Third-Party Integrations](#third-party-integrations)
+- [API Documentation](#api-documentation)
+- [Development](#development)
+- [Deployment](#deployment)
 
-## Quick Docker Start
+## Features
 
-  ```bash
-    python3.10 -m venv ~/.venvs/project_name
-    source ~/.venvs/adma_geonode_project/bin/activate
+### File & Folder Management
+- Hierarchical folder structure with unlimited nesting
+- Support for multiple file types (GIS, documents, images, spreadsheets)
+- Public/private visibility controls
+- Drag-and-drop file uploads
+- Folder and file renaming
 
-    pip install Django==4.2.9
+### GIS Data Processing
+- Automatic detection and processing of spatial files (Shapefiles, GeoTIFF, GeoJSON, KML)
+- Integration with GeoServer for spatial data publishing
+- Interactive map visualization using OpenLayers
+- Multiple base map options (OpenStreetMap, Satellite, Terrain, Topographic)
+- Support for both vector and raster data
 
-    mkdir ~/project_name
+### Custom Maps
+- Create composite maps by combining multiple spatial layers
+- Layer ordering and styling controls
+- Map location tracking with navigation overview
+- Public map sharing
 
-    GN_VERSION=master # Define the branch or tag you want to generate the project from
-    django-admin startproject --template=https://github.com/GeoNode/geonode-project/archive/refs/heads/$GN_VERSION.zip -e py,sh,md,rst,json,yml,ini,env,sample,properties -n monitoring-cron -n Dockerfile project_name ~/project_name
+### Analysis Tools
+- **Seeding Tool**: Process agricultural seeding data with GIS outputs
+- **Shape to JSON**: Convert shapefiles to GeoJSON format
+- **SI Tool**: Sustainability index calculations
 
-    cd ~/project_name
-    python create-envfile.py 
-  ```
+### Third-Party Integrations
+- **John Deere Operations Center**: Sync field boundaries, operations data, and metadata
+- **Realm5 Weather Stations**: Daily weather observations with data visualization
 
-The project can also be generated from a local checkout of the goenode-project repository
+### User Features
+- User registration and authentication
+- Token-based API access
+- Dashboard with file statistics
+- Search functionality across files and folders
 
-```bash
-    git clone https://github.com/GeoNode/geonode-project
-    git checkout $GN_VERSION
-    django-admin startproject --template=./geonode-project -e py,sh,md,rst,json,yml,ini,env,sample,properties -n monitoring-cron -n Dockerfile project_name ~/project_name
+## Architecture
 
-  ```
-
-`create-envfile.py` accepts the following arguments:
-
-- `--https`: Enable SSL. It's disabled by default
-- `--env_type`: 
-   - When set to `prod` `DEBUG` is disabled and the creation of a valid `SSL` is requested to Letsencrypt's ACME server
-   - When set to `test`  `DEBUG` is disabled and a test `SSL` certificate is generated for local testing
-   - When set to `dev`  `DEBUG` is enabled and no `SSL` certificate is generated
-- `--hostname`: The URL that whill serve GeoNode (`localhost` by default)
-- `--email`: The administrator's email. Notice that a real email and a valid SMPT configurations are required if  `--env_type` is seto to `prod`. Letsencrypt uses to email for issuing the SSL certificate 
-- `--geonodepwd`: GeoNode's administrator password. A random value is set if left empty
-- `--geoserverpwd`: GeoNode's administrator password. A random value is set if left empty
-- `--pgpwd`: PostgreSQL's administrator password. A random value is set if left empty
-- `--dbpwd`: GeoNode DB user role's password. A random value is set if left empty
-- `--geodbpwd`: GeoNode data DB user role's password. A random value is set if left empty
-- `--clientid`: Client id of Geoserver's GeoNode Oauth2 client. A random value is set if left empty
-- `--clientsecret`: Client secret of Geoserver's GeoNode Oauth2 client. A random value is set if left empty
-```bash
-  docker compose build
-  docker compose up -d
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Nginx (Reverse Proxy)                 │
+└─────────────────────────────────────────────────────────────┘
+                              │
+         ┌────────────────────┼────────────────────┐
+         │                    │                    │
+         ▼                    ▼                    ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│  Django App     │  │   GeoServer     │  │   Static Files  │
+│  (Port 8000)    │  │   (Port 8080)   │  │                 │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+         │                    │
+         │                    │
+         ▼                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              PostgreSQL + PostGIS (Port 5432)               │
+└─────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────┐  ┌─────────────────┐
+│  Celery Worker  │◄─│     Redis       │
+│  (Background)   │  │   (Broker)      │
+└─────────────────┘  └─────────────────┘
 ```
 
-## Developer Workshop
+### Services
 
-Available at
+| Service    | Description                                      | Port  |
+|------------|--------------------------------------------------|-------|
+| nginx      | Reverse proxy, SSL termination, static files     | 80/443|
+| django     | Main application server                          | 8000  |
+| geoserver  | Spatial data server (WMS/WFS)                    | 8080  |
+| postgres   | Database with PostGIS extension                  | 5432  |
+| redis      | Celery message broker and caching                | 6379  |
+| celery     | Background task processing                       | -     |
 
-  ```bash
-    http://geonode.org/dev-workshop
-  ```
+## Quick Start
 
-## Create a custom project
+### Prerequisites
 
-**NOTE**: *You can call your geonode project whatever you like **except 'geonode'**. Follow the naming conventions for python packages (generally lower case with underscores (``_``). In the examples below, replace ``adma_geonode_project`` with whatever you would like to name your project.*
+- Docker and Docker Compose
+- Git
 
-To setup your project follow these instructions:
+### Installation
 
-1. Generate the project
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd adma_geonode_project
+   ```
 
-    ```bash
-    git clone https://github.com/GeoNode/geonode-project.git -b <your_branch>
-    source /usr/share/virtualenvwrapper/virtualenvwrapper.sh
-    mkvirtualenv --python=/usr/bin/python3 adma_geonode_project
-    pip install Django==3.2.16
+2. Create environment file:
+   ```bash
+   cp adma_geo/.env.sample adma_geo/.env
+   # Edit .env with your configuration
+   ```
 
-    django-admin startproject --template=./geonode-project -e py,sh,md,rst,json,yml,ini,env,sample,properties -n monitoring-cron -n Dockerfile adma_geonode_project
+3. Build and start services:
+   ```bash
+   cd adma_geo
+   docker-compose build
+   docker-compose up -d
+   ```
 
-    cd adma_geonode_project
-    ```
+4. Run initial setup:
+   ```bash
+   docker-compose exec django python manage.py migrate
+   docker-compose exec django python manage.py create_system_tools
+   docker-compose exec django python manage.py createsuperuser
+   ```
 
-2. Create the .env file
+5. Access the application:
+   - Main site: http://localhost/
+   - GeoServer: http://localhost/geoserver/
+   - Admin: http://localhost/admin/
 
-    An `.env` file is requird to run the application. It can be created from the `.env.sample` either manually or with the create-envfile.py script.
+## Configuration
 
-    The script accepts several parameters to create the file, in detail:
+### Environment Variables
 
-    - *hostname*: e.g. master.demo.geonode.org, default localhost
-    - *https*: (boolean), default value is False
-    - *email*: Admin email (this is required if https is set to True since a valid email is required by Letsencrypt certbot)
-    - *env_type*: `prod`, `test` or `dev`. It will set the `DEBUG` variable to `False` (`prod`, `test`) or `True` (`dev`)
-    - *geonodepwd*: GeoNode admin password (required inside the .env)
-    - *geoserverpwd*: Geoserver admin password (required inside the .env)
-    - *pgpwd*: PostgreSQL password (required inside the .env)
-    - *dbpwd*: GeoNode DB user password (required inside the .env)
-    - *geodbpwd*: Geodatabase user password (required inside the .env)
-    - *clientid*: Oauth2 client id (required inside the .env)
-    - *clientsecret*: Oauth2 client secret (required inside the .env)
-    - *secret key*: Django secret key (required inside the .env)
-    - *sample_file*: absolute path to a env_sample file used to create the env_file. If not provided, the one inside the GeoNode project is used.
-    - *file*: absolute path to a json file that contains all the above configuration
-
-     **NOTE:**
-    - if the same configuration is passed in the json file and as an argument, the CLI one will overwrite the one in the JSON file
-    - If some value is not provided, a random string is used
-
-      Example USAGE
-
-      ```bash
-      python create-envfile.py -f /opt/core/geonode-project/file.json \
-        --hostname localhost \
-        --https \
-        --email random@email.com \
-        --geonodepwd gn_password \
-        --geoserverpwd gs_password \
-        --pgpwd pg_password \
-        --dbpwd db_password \
-        --geodbpwd _db_password \
-        --clientid 12345 \
-        --clientsecret abc123 
-      ```
-
-      Example JSON expected:
-
-      ```JSON
-      {
-        "hostname": "value",
-        "https": "value",
-        "email": "value",
-        "geonodepwd": "value",
-        "geoserverpwd": "value",
-        "pgpwd": "value",
-        "dbpwd": "value",
-        "geodbpwd": "value",
-        "clientid": "value",
-        "clientsecret": "value"
-      } 
-      ```
-
-### Start your server
-*Skip this part if you want to run the project using Docker instead* see [Start your server using Docker](#start-your-server-using-docker)
-
-1. Setup the Python Dependencies
-
-    **NOTE**: *Important: modify your `requirements.txt` file, by adding the `GeoNode` branch before continue!*
-
-    (see [Hints: Configuring `requirements.txt`](#hints-configuring-requirementstxt))
-
-    ```bash
-    cd src
-    pip install -r requirements.txt --upgrade
-    pip install -e . --upgrade
-
-    # Install GDAL Utilities for Python
-    pip install pygdal=="`gdal-config --version`.*"
-
-    # Dev scripts
-    mv ../.override_dev_env.sample ../.override_dev_env
-    mv manage_dev.sh.sample manage_dev.sh
-    mv paver_dev.sh.sample paver_dev.sh
-
-    source ../.override_dev_env
-
-    # Using the Default Settings
-    sh ./paver_dev.sh reset
-    sh ./paver_dev.sh setup
-    sh ./paver_dev.sh sync
-    sh ./paver_dev.sh start
-    ```
-
-2. Access GeoNode from browser
-
-    **NOTE**: default admin user is ``admin`` (with pw: ``admin``)
-
-    ```bash
-    http://localhost:8000/
-    ```
-
-### Start your server using Docker
-
-You need Docker 1.12 or higher, get the latest stable official release for your platform.
-Once you have the project configured run the following command from the root folder of the project.
-
-1. Run `docker-compose` to start it up (get a cup of coffee or tea while you wait)
-
-    ```bash
-    docker-compose build --no-cache
-    docker-compose up -d
-    ```
-
-    ```bash
-    set COMPOSE_CONVERT_WINDOWS_PATHS=1
-    ```
-
-    before running `docker-compose up`
-
-2. Access the site on http://localhost/
-
-## Run the instance in development mode
-
-### Use dedicated docker-compose files while developing
-
-**NOTE**: In this example we are going to keep localhost as the target IP for GeoNode
-
-  ```bash
-  docker-compose -f docker-compose.development.yml -f docker-compose.development.override.yml up
-  ```
-
-## Run the instance on a public site
-
-### Preparation of the image (First time only)
-
-**NOTE**: In this example we are going to publish to the public IP http://123.456.789.111
+Key environment variables in `.env`:
 
 ```bash
-vim .env
-  --> replace localhost with 123.456.789.111 everywhere
+# Django
+DEBUG=True
+SECRET_KEY=your-secret-key
+ALLOWED_HOSTS=localhost,127.0.0.1
+
+# Database
+POSTGRES_DB=adma_db
+POSTGRES_USER=adma_user
+POSTGRES_PASSWORD=your-password
+
+# GeoServer
+GEOSERVER_URL=http://geoserver:8080/geoserver
+GEOSERVER_ADMIN_USER=admin
+GEOSERVER_ADMIN_PASSWORD=geoserver
+
+# Third-Party APIs (optional)
+REALM5_API_KEY=your-realm5-api-key
+JOHNDEERE_CLIENT_ID=your-client-id
+JOHNDEERE_CLIENT_SECRET=your-client-secret
 ```
 
-### Startup the image
+### Timezone
 
-```bash
-docker-compose up --build -d
-```
-
-### Stop the Docker Images
-
-```bash
-docker-compose stop
-```
-
-### Fully Wipe-out the Docker Images
-
-**WARNING**: This will wipe out all the repositories created until now.
-
-**NOTE**: The images must be stopped first
-
-```bash
-docker system prune -a
-```
-
-## Backup and Restore from Docker Images
-
-### Run a Backup
-
-```bash
-SOURCE_URL=$SOURCE_URL TARGET_URL=$TARGET_URL ./adma_geonode_project/br/backup.sh $BKP_FOLDER_NAME
-```
-
-- BKP_FOLDER_NAME:
-  Default value = backup_restore
-  Shared Backup Folder name.
-  The scripts assume it is located on "root" e.g.: /$BKP_FOLDER_NAME/
-
-- SOURCE_URL:
-  Source Server URL, the one generating the "backup" file.
-
-- TARGET_URL:
-  Target Server URL, the one which must be synched.
-
-e.g.:
-
-```bash
-docker exec -it django4adma_geonode_project sh -c 'SOURCE_URL=$SOURCE_URL TARGET_URL=$TARGET_URL ./adma_geonode_project/br/backup.sh $BKP_FOLDER_NAME'
-```
-
-### Run a Restore
-
-```bash
-SOURCE_URL=$SOURCE_URL TARGET_URL=$TARGET_URL ./adma_geonode_project/br/restore.sh $BKP_FOLDER_NAME
-```
-
-- BKP_FOLDER_NAME:
-  Default value = backup_restore
-  Shared Backup Folder name.
-  The scripts assume it is located on "root" e.g.: /$BKP_FOLDER_NAME/
-
-- SOURCE_URL:
-  Source Server URL, the one generating the "backup" file.
-
-- TARGET_URL:
-  Target Server URL, the one which must be synched.
-
-e.g.:
-
-```bash
-docker exec -it django4adma_geonode_project sh -c 'SOURCE_URL=$SOURCE_URL TARGET_URL=$TARGET_URL ./adma_geonode_project/br/restore.sh $BKP_FOLDER_NAME'
-```
-
-## Recommended: Track your changes
-
-Step 1. Install Git (for Linux, Mac or Windows).
-
-Step 2. Init git locally and do the first commit:
-
-```bash
-git init
-git add *
-git commit -m "Initial Commit"
-```
-
-Step 3. Set up a free account on github or bitbucket and make a copy of the repo there.
-
-## Hints: Configuring `requirements.txt`
-
-You may want to configure your requirements.txt, if you are using additional or custom versions of python packages. For example
+The system uses `America/Chicago` timezone by default. Configure in `settings.py`:
 
 ```python
-Django==3.2.16
-git+git://github.com/<your organization>/geonode.git@<your branch>
+TIME_ZONE = 'America/Chicago'
 ```
 
-## Increasing PostgreSQL Max connections
+## Third-Party Integrations
 
-In case you need to increase the PostgreSQL Max Connections , you can modify
-the **POSTGRESQL_MAX_CONNECTIONS** variable in **.env** file as below:
+### John Deere Operations Center
 
+Syncs field data, boundaries, and operations from John Deere.
+
+**Setup:**
+1. Register application at [John Deere Developer Portal](https://developer.deere.com/)
+2. Configure OAuth2 credentials in `.env`
+3. Set organization ID in settings
+
+**Sync Schedule:** Daily at 3:00 AM
+
+**Data Synced:**
+- Field metadata and boundaries (as shapefiles)
+- Field operations with boundaries
+- Organization hierarchy
+
+### Realm5 Weather Stations
+
+Syncs weather observation data from Realm5 IoT sensors.
+
+**Setup:**
+1. Obtain API key from Realm5
+2. Add `REALM5_API_KEY` to `.env`
+
+**Sync Schedule:** Daily at 2:00 AM
+
+**Data Synced:**
+- Daily weather observations (JSON files)
+- Aggregated daily averages (`all.json`)
+- Variables: temperature, humidity, wind speed, dew point, etc.
+
+**Manual Sync:**
+```bash
+docker-compose exec django python manage.py shell -c "
+from filemanager.tasks import sync_realm5_task
+sync_realm5_task()
+"
 ```
-POSTGRESQL_MAX_CONNECTIONS=200
-```
 
-In this case PostgreSQL will run accepting 200 maximum connections.
+## API Documentation
 
-## Test project generation and docker-compose build Vagrant usage
+ADMA provides RESTful APIs with token-based authentication.
 
-Testing with [vagrant](https://www.vagrantup.com/docs) works like this:
-What vagrant does:
-
-Starts a vm for test on docker swarm:
-    - configures a GeoNode project from template every time from your working directory (so you can develop directly on geonode-project).
-    - exposes service on localhost port 8888
-    - rebuilds everytime everything with cache [1] to avoid banning from docker hub with no login.
-    - starts, reboots to check if docker services come up correctly after reboot.
+### Authentication
 
 ```bash
-vagrant plugin install vagrant-reload
-#test things for docker-compose
-vagrant up
-# check services are up upon reboot
-vagrant ssh geonode-compose -c 'docker ps'
+# Get auth token
+curl -X POST http://localhost/api/auth/token/ \
+  -d "username=your_username&password=your_password"
+
+# Use token in requests
+curl -H "Authorization: Token YOUR_TOKEN" \
+  http://localhost/api/files/
 ```
 
-Test geonode on [http://localhost:8888/](http://localhost:8888/)
+### Key Endpoints
 
-To clean up things and delete the vagrant box:
+| Endpoint                          | Method | Description                    |
+|-----------------------------------|--------|--------------------------------|
+| `/api/auth/token/`                | POST   | Get authentication token       |
+| `/api/files/`                     | GET    | List user's files              |
+| `/api/files/upload/`              | POST   | Upload a file                  |
+| `/api/files/<id>/download/`       | GET    | Download a file                |
+| `/api/folders/`                   | GET    | List user's folders            |
+| `/api/folders/<id>/download/`     | GET    | Download folder as ZIP         |
+
+See `API_DOCUMENTATION.md` for complete API reference.
+
+## Development
+
+### Running Locally
 
 ```bash
-vagrant destroy -f
+cd adma_geo
+docker-compose up -d
+
+# View logs
+docker-compose logs -f django
+
+# Django shell
+docker-compose exec django python manage.py shell
+
+# Run tests
+docker-compose exec django python manage.py test
 ```
 
-## Test project generation and Docker swarm build on vagrant
+### Code Structure
 
-What vagrant does:
+```
+adma_geo/
+├── adma_geo/           # Project settings
+│   ├── settings.py
+│   ├── urls.py
+│   └── celery.py
+├── filemanager/        # Main application
+│   ├── models.py       # File, Folder, Map models
+│   ├── views.py        # View functions
+│   ├── tasks.py        # Celery tasks
+│   ├── api_views.py    # REST API views
+│   ├── realm5_client.py
+│   └── johndeere_client.py
+├── templates/          # HTML templates
+├── static/             # Static assets
+├── media/              # User uploads
+└── docker-compose.yml
+```
 
-Starts a vm for test on docker swarm:
-    - configures a GeoNode project from template every time from your working directory (so you can develop directly on geonode-project).
-    - exposes service on localhost port 8888
-    - rebuilds everytime everything with cache [1] to avoid banning from docker hub with no login.
-    - starts, reboots to check if docker services come up correctly after reboot.
+### Adding New Features
 
-To test on a docker swarm enable vagrant box:
+1. Create/modify models in `filemanager/models.py`
+2. Run migrations: `docker-compose exec django python manage.py makemigrations && docker-compose exec django python manage.py migrate`
+3. Add views in `filemanager/views.py`
+4. Create templates in `templates/filemanager/`
+5. Update URLs in `filemanager/urls.py`
+
+## Deployment
+
+### Production Setup
+
+1. Update `.env` for production:
+   ```bash
+   DEBUG=False
+   ALLOWED_HOSTS=your-domain.com
+   ```
+
+2. Configure SSL in Nginx
+
+3. Build and deploy:
+   ```bash
+   docker-compose -f docker-compose.yml up -d --build
+   ```
+
+4. Collect static files:
+   ```bash
+   docker-compose exec django python manage.py collectstatic --noinput
+   ```
+
+### Backup
 
 ```bash
-vagrant up
-VAGRANT_VAGRANTFILE=Vagrantfile.stack vagrant up
-# check services are up upon reboot
-VAGRANT_VAGRANTFILE=Vagrantfile.stack vagrant ssh geonode-compose -c 'docker service ls'
+# Database backup
+docker-compose exec postgres pg_dump -U adma_user adma_db > backup.sql
+
+# Media files backup
+tar -czvf media_backup.tar.gz adma_geo/media/
 ```
 
-Test geonode on [http://localhost:8888/](http://localhost:8888/)
-Again, to clean up things and delete the vagrant box:
+### Monitoring
 
-```bash
-VAGRANT_VAGRANTFILE=Vagrantfile.stack vagrant destroy -f
-```
+- Check service status: `docker-compose ps`
+- View logs: `docker-compose logs -f <service>`
+- Celery tasks: Check Django admin or Celery logs
 
-for direct deveolpment on geonode-project after first `vagrant up` to rebuild after changes to project, you can do `vagrant reload` like this:
+## License
 
-```bash
-vagrant up
-```
+ADMA 2021-2026. All rights reserved.
 
-What vagrant does (swarm or comnpose cases):
+## Support
 
-Starts a vm for test on plain docker service with docker-compose:
-    - configures a GeoNode project from template every time from your working directory (so you can develop directly on geonode-project).
-    - rebuilds everytime everything with cache [1] to avoid banning from docker hub with no login.
-    - starts, reboots.
-
-[1] to achieve `docker-compose build --no-cache` just destroy vagrant boxes `vagrant destroy -f`
-
-# adma_genode_adapted
+For questions or issues, contact the development team.
