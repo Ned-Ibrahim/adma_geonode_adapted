@@ -249,22 +249,19 @@ adma_geo/
 
 ### Production Setup
 
-1. Update `.env` for production:
+1. Configure SSL in Nginx
+
+2. Build and deploy using the production compose file:
    ```bash
-   DEBUG=False
-   ALLOWED_HOSTS=your-domain.com
+   cd adma_geo
+   docker-compose -f docker-compose-adma.yml up -d --build
    ```
 
-2. Configure SSL in Nginx
-
-3. Build and deploy:
+3. Run migrations and collect static files:
    ```bash
-   docker-compose -f docker-compose.yml up -d --build
-   ```
-
-4. Collect static files:
-   ```bash
-   docker-compose exec django python manage.py collectstatic --noinput
+   docker-compose -f docker-compose-adma.yml exec django python manage.py migrate
+   docker-compose -f docker-compose-adma.yml exec django python manage.py collectstatic --noinput
+   docker-compose -f docker-compose-adma.yml exec django python manage.py create_system_tools
    ```
 
 ### Backup
