@@ -146,11 +146,11 @@ from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
     'sync-realm5-daily': {
         'task': 'filemanager.tasks.sync_realm5_task',
-        'schedule': crontab(hour=5, minute=0),  # Run at 2:00 AM daily
+        'schedule': crontab(hour=2, minute=0),  # Run at 2:00 AM daily
     },
     'sync-johndeere-daily': {
         'task': 'filemanager.tasks.sync_johndeere_task',
-        'schedule': crontab(hour=6, minute=0),  # Run at 3:00 AM daily
+        'schedule': crontab(hour=3, minute=0),  # Run at 3:00 AM daily
     },
 }
 
