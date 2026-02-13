@@ -609,6 +609,7 @@ def folder_detail(request, folder_id):
         'files': files,
         'breadcrumbs': folder.get_breadcrumbs(),
         'can_edit': folder.owner == request.user,
+        'is_public_view': False,
         'page_obj': page_obj,
         'total_items': total_items,
         'total_subfolders': total_subfolders,
