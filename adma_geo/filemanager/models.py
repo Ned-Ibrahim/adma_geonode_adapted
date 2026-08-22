@@ -401,6 +401,25 @@ class File(models.Model):
         """Get all maps that contain this file"""
         return [membership.map for membership in self.map_memberships.all()]
 
+    # ---- ADAPT (third-party warehouse) reference support ----
+    def is_adapt_reference(self):
+        """True if this File references a file on the mounted ADAPT share
+        rather than storing a local copy in MEDIA_ROOT."""
+        return (
+            self.is_third_party
+            and self.third_party_source == 'adapt'
+            and bool(self.third_party_url)
+            and not bool(self.file)
+        )
+
+    def open_content(self, mode='rb'):
+        """Return an open file handle for this File's content, whether it is a
+        locally stored file or an ADAPT reference read live from the mount."""
+        if self.is_adapt_reference():
+            return open(self.third_party_url, mode)
+        return self.file.open(mode)
+
+
 
 class Map(models.Model):
     """

@@ -880,7 +880,7 @@ def file_detail(request, file_id):
     
     if file_obj.file_type == 'text' and file_obj.file_size < 1024 * 1024:  # Max 1MB for preview
         try:
-            with file_obj.file.open('r') as f:
+            with file_obj.open_content('r') as f:
                 file_content = f.read()
         except (UnicodeDecodeError, FileNotFoundError):
             file_content = None
@@ -889,7 +889,7 @@ def file_detail(request, file_id):
     elif file_obj.file_type == 'csv' and file_obj.file_size < 5 * 1024 * 1024:  # Max 5MB for CSV
         import csv
         try:
-            with file_obj.file.open('r') as f:
+            with file_obj.open_content('r') as f:
                 csv_reader = csv.reader(f)
                 csv_headers = next(csv_reader, None)  # Get headers
                 if csv_headers:
@@ -910,8 +910,8 @@ def file_detail(request, file_id):
         try:
             import pandas as pd
             # Read Excel file using pandas
-            with file_obj.file.open('rb') as f:
-                df = pd.read_excel(f, engine='openpyxl' if file_obj.file.name.endswith('.xlsx') else 'xlrd')
+            with file_obj.open_content('rb') as f:
+                df = pd.read_excel(f, engine='openpyxl' if file_obj.name.endswith('.xlsx') else 'xlrd')
                 
                 # Convert to list format similar to CSV
                 csv_headers = ['row_number'] + df.columns.tolist()
@@ -1023,7 +1023,7 @@ def public_file_detail(request, file_id):
     
     if file_obj.file_type == 'text' and file_obj.file_size < 1024 * 1024:  # Max 1MB for preview
         try:
-            with file_obj.file.open('r') as f:
+            with file_obj.open_content('r') as f:
                 file_content = f.read()
         except (UnicodeDecodeError, FileNotFoundError):
             file_content = None
@@ -1032,7 +1032,7 @@ def public_file_detail(request, file_id):
     elif file_obj.file_type == 'csv' and file_obj.file_size < 5 * 1024 * 1024:  # Max 5MB for CSV
         import csv
         try:
-            with file_obj.file.open('r') as f:
+            with file_obj.open_content('r') as f:
                 csv_reader = csv.reader(f)
                 csv_headers = next(csv_reader, None)  # Get headers
                 if csv_headers:
@@ -1053,8 +1053,8 @@ def public_file_detail(request, file_id):
         try:
             import pandas as pd
             # Read Excel file using pandas
-            with file_obj.file.open('rb') as f:
-                df = pd.read_excel(f, engine='openpyxl' if file_obj.file.name.endswith('.xlsx') else 'xlrd')
+            with file_obj.open_content('rb') as f:
+                df = pd.read_excel(f, engine='openpyxl' if file_obj.name.endswith('.xlsx') else 'xlrd')
                 
                 # Convert to list format similar to CSV
                 csv_headers = ['row_number'] + df.columns.tolist()
@@ -1279,7 +1279,7 @@ def download_file(request, file_id):
     
     try:
         response = FileResponse(
-            file_obj.file.open('rb'),
+            file_obj.open_content('rb'),
             as_attachment=True,
             filename=file_obj.name
         )
