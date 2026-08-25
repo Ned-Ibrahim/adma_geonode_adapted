@@ -8,7 +8,6 @@ app_name = 'filemanager'
 urlpatterns = [
     # Public URLs
     path('', views.HomeView.as_view(), name='home'),
-    path('register/', views.RegisterView.as_view(), name='register'),
     path('search/', views.SearchView.as_view(), name='search'),
     path('documentation/', views.DocumentationView.as_view(), name='documentation'),
     path('public/folder/<uuid:folder_id>/', views.public_folder_detail, name='public_folder_detail'),

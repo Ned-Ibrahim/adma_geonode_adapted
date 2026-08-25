@@ -13,7 +13,7 @@ from django.urls import reverse_lazy
 from django.conf import settings
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool
-from .forms import RegistrationForm, FolderForm, FileUploadForm
+from .forms import FolderForm, FileUploadForm
 from .tasks import process_gis_file_task
 
 def get_robust_user_statistics(user):
@@ -1843,16 +1843,6 @@ def dashboard_stats(request):
         return JsonResponse({'success': True, 'stats': stats})
     
     return JsonResponse({'success': False, 'error': 'Method not allowed'})
-
-class RegisterView(CreateView):
-    form_class = RegistrationForm
-    template_name = 'registration/register.html'
-    success_url = reverse_lazy('filemanager:dashboard')
-
-    def form_valid(self, form):
-        response = super().form_valid(form)
-        messages.success(self.request, 'Account created successfully!')
-        return response
 
 class DocumentationView(TemplateView):
     """Documentation page view"""
