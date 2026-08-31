@@ -58,6 +58,9 @@ class Folder(models.Model):
         null=True,
         help_text="Unique identifier from the third-party platform"
     )
+    # Cached rollups for third-party/reference folders (avoids slow recursive walks)
+    cached_total_size = models.BigIntegerField(default=0, help_text="Precomputed total size of files in this folder and subfolders")
+    cached_total_file_count = models.IntegerField(default=0, help_text="Precomputed total file count in this folder and subfolders")
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -131,6 +134,8 @@ class Folder(models.Model):
     
     def get_total_size(self):
         """Calculate total size of all files in this folder and its subfolders recursively"""
+        if self.is_third_party:
+            return self.cached_total_size
         total_size = 0
         
         # Add size of all files in this folder
@@ -155,7 +160,11 @@ class Folder(models.Model):
     
     @property
     def total_file_count(self):
-        """Get total count of all files recursively (including subfolders)"""
+        """Get total count of all files recursively (including subfolders).
+        For third-party (referenced) folders, return only the direct file count to
+        avoid an expensive full-tree walk on every page load."""
+        if self.is_third_party:
+            return self.cached_total_file_count
         count = self.files.count()
         for subfolder in self.subfolders.all():
             count += subfolder.total_file_count
