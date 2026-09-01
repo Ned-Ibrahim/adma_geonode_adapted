@@ -1277,12 +1277,18 @@ def download_file(request, file_id):
     if file_obj.owner != request.user and not file_obj.is_public:
         raise Http404("File not found")
     
+    # Referenced files have no media URL, so previews come back through this view
+    # asking for inline disposition instead of a download.
+    inline = request.GET.get('disposition') == 'inline'
+
     try:
         response = FileResponse(
             file_obj.open_content('rb'),
-            as_attachment=True,
+            as_attachment=not inline,
             filename=file_obj.name
         )
+        if inline and file_obj.mime_type:
+            response['Content-Type'] = file_obj.mime_type
         return response
     except FileNotFoundError:
         raise Http404("File not found on disk")

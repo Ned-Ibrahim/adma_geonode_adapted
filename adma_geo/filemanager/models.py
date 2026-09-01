@@ -132,9 +132,16 @@ class Folder(models.Model):
         
         return " | ".join(metadata_parts)
     
+    @property
+    def uses_cached_totals(self):
+        """True for folders whose totals come from recompute_folder_sizes rather
+        than a live recursive walk. Only reference-backed sources qualify: John Deere
+        and Realm5 folders hold real local files and must keep computing live."""
+        return self.is_third_party and self.third_party_source == 'adapt'
+
     def get_total_size(self):
         """Calculate total size of all files in this folder and its subfolders recursively"""
-        if self.is_third_party:
+        if self.uses_cached_totals:
             return self.cached_total_size
         total_size = 0
         
@@ -161,9 +168,9 @@ class Folder(models.Model):
     @property
     def total_file_count(self):
         """Get total count of all files recursively (including subfolders).
-        For third-party (referenced) folders, return only the direct file count to
-        avoid an expensive full-tree walk on every page load."""
-        if self.is_third_party:
+        Reference-backed folders read a precomputed total instead, because walking
+        the whole tree on every page load is too slow for a mounted warehouse."""
+        if self.uses_cached_totals:
             return self.cached_total_file_count
         count = self.files.count()
         for subfolder in self.subfolders.all():
@@ -426,7 +433,25 @@ class File(models.Model):
         locally stored file or an ADAPT reference read live from the mount."""
         if self.is_adapt_reference():
             return open(self.third_party_url, mode)
+        if not self.file:
+            raise FileNotFoundError(
+                f"File {self.id} has no stored content and no reference path"
+            )
         return self.file.open(mode)
+
+    @property
+    def preview_url(self):
+        """URL that renders this file inline (image tags, embeds).
+
+        Locally stored files serve straight from MEDIA_ROOT. Referenced files have
+        no media URL, so they stream through the download view instead.
+        """
+        if self.is_adapt_reference():
+            url = reverse("filemanager:download_file", args=[self.id])
+            return f"{url}?disposition=inline"
+        if self.file:
+            return self.file.url
+        return ""
 
 
 
