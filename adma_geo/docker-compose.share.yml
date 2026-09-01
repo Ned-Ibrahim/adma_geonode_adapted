@@ -1,3 +1,19 @@
+# ============================================================================
+# DO NOT USE THIS TOGETHER WITH docker-compose.adapt.yml
+#
+# adapt.yml mounts //snr18/Adapt read-only at /adapt, and sync_adapt walks
+# "Data Management" from there, creating rows with is_public=True.
+#
+# This file puts ADMA's own uploads INSIDE that same tree, at
+# Data Management/Workspace/adma_geo_production/media. Run both and every
+# pilot user's private upload is re-imported as a public third-party file,
+# readable at /public/file/<uuid>/ with no login.
+#
+# Use adapt.yml (browse the warehouse, read-only) OR this file (ADMA's
+# uploads live on the share), never both, unless sync_adapt is given a
+# --subdir that excludes Workspace/adma_geo_production.
+# ============================================================================
+
 # Opt-in override: store ADMA media on the ADAPT share instead of a local
 # Docker volume.
 #
