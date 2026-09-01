@@ -42,7 +42,6 @@ services:
       - .:/app
       - adma_geo_media:/app/media
       - adma_geo_static:/app/staticfiles
-      - /mnt/adapt:/adapt:ro
     ports:
       - "8001:8000"
     environment:
