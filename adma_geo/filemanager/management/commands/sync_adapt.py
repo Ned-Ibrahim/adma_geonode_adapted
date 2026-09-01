@@ -94,7 +94,7 @@ class Command(BaseCommand):
                     child_folder, created = Folder.objects.get_or_create(
                         name=dname, parent=parent_folder, owner=owner,
                         defaults={
-                            'is_public': True, 'is_third_party': True,
+                            'is_public': False, 'is_third_party': True,
                             'third_party_source': 'adapt',
                             'third_party_id': os.path.relpath(abs_child, os.path.abspath(source_root)),
                         },
@@ -127,7 +127,7 @@ class Command(BaseCommand):
                         file_size=size,
                         file_type=guess_file_type(fname),
                         mime_type=mime or '',
-                        is_public=True,
+                        is_public=False,
                         is_third_party=True,
                         third_party_source='adapt',
                         third_party_id=rel_id,

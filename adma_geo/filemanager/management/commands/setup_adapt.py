@@ -47,7 +47,7 @@ class Command(BaseCommand):
             existing_folder.delete()
 
         adapt_folder = Folder.objects.create(
-            name='ADAPT', owner=owner, parent=None, is_public=True,
+            name='ADAPT', owner=owner, parent=None, is_public=False,
             is_third_party=True, third_party_source='adapt', third_party_id='adapt_root',
         )
 
