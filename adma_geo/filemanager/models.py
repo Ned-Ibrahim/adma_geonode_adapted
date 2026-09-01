@@ -58,6 +58,9 @@ class Folder(models.Model):
         null=True,
         help_text="Unique identifier from the third-party platform"
     )
+    # Cached rollups for third-party/reference folders (avoids slow recursive walks)
+    cached_total_size = models.BigIntegerField(default=0, help_text="Precomputed total size of files in this folder and subfolders")
+    cached_total_file_count = models.IntegerField(default=0, help_text="Precomputed total file count in this folder and subfolders")
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -131,6 +134,8 @@ class Folder(models.Model):
     
     def get_total_size(self):
         """Calculate total size of all files in this folder and its subfolders recursively"""
+        if self.is_third_party:
+            return self.cached_total_size
         total_size = 0
         
         # Add size of all files in this folder
@@ -155,7 +160,11 @@ class Folder(models.Model):
     
     @property
     def total_file_count(self):
-        """Get total count of all files recursively (including subfolders)"""
+        """Get total count of all files recursively (including subfolders).
+        For third-party (referenced) folders, return only the direct file count to
+        avoid an expensive full-tree walk on every page load."""
+        if self.is_third_party:
+            return self.cached_total_file_count
         count = self.files.count()
         for subfolder in self.subfolders.all():
             count += subfolder.total_file_count
@@ -400,6 +409,25 @@ class File(models.Model):
     def maps_containing_this_file(self):
         """Get all maps that contain this file"""
         return [membership.map for membership in self.map_memberships.all()]
+
+    # ---- ADAPT (third-party warehouse) reference support ----
+    def is_adapt_reference(self):
+        """True if this File references a file on the mounted ADAPT share
+        rather than storing a local copy in MEDIA_ROOT."""
+        return (
+            self.is_third_party
+            and self.third_party_source == 'adapt'
+            and bool(self.third_party_url)
+            and not bool(self.file)
+        )
+
+    def open_content(self, mode='rb'):
+        """Return an open file handle for this File's content, whether it is a
+        locally stored file or an ADAPT reference read live from the mount."""
+        if self.is_adapt_reference():
+            return open(self.third_party_url, mode)
+        return self.file.open(mode)
+
 
 
 class Map(models.Model):
