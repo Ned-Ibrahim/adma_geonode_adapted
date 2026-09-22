@@ -30,3 +30,8 @@ xlrd>=2.0.1
 # NOTE: Vector database and embedding dependencies removed
 # Search now uses PostgreSQL text matching instead of semantic embeddings
 
+
+# ADAPT permissions: read folder security descriptors over SMB, log in against AD
+smbprotocol>=1.13.0
+django-auth-ldap>=4.6.0
+python-ldap>=3.4.0

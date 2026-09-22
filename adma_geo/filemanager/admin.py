@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Folder, File, Map, MapLayer, Tool
+from .models import Folder, File, Map, MapLayer, Tool, FolderAcl, DirectoryIdentity
 
 
 @admin.register(Folder)
@@ -64,3 +64,25 @@ class ToolAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(FolderAcl)
+class FolderAclAdmin(admin.ModelAdmin):
+    list_display = ('folder', 'owner_sid', 'ace_count', 'fetched_at', 'has_error')
+    list_filter = ('fetched_at',)
+    search_fields = ('folder__name', 'folder__third_party_id', 'owner_sid')
+    readonly_fields = ('folder', 'descriptor', 'owner_sid', 'ace_count', 'fetched_at', 'error')
+
+    def has_error(self, obj):
+        return bool(obj.error)
+    has_error.boolean = True
+
+
+@admin.register(DirectoryIdentity)
+class DirectoryIdentityAdmin(admin.ModelAdmin):
+    list_display = ('user', 'sid', 'group_count', 'fetched_at')
+    search_fields = ('user__username', 'sid', 'dn')
+    readonly_fields = ('user', 'dn', 'sid', 'group_sids', 'fetched_at')
+
+    def group_count(self, obj):
+        return len(obj.group_sids or [])

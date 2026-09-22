@@ -1040,3 +1040,47 @@ class Tool(models.Model):
             created_tools.append((tool, created))
         
         return created_tools
+
+
+class FolderAcl(models.Model):
+    """The security descriptor of an ADAPT folder, exactly as the file server returned it.
+
+    Fetched by `sync_adapt_acls` as the service account (READ_CONTROL only) and
+    evaluated per request by `filemanager.permissions`. The raw bytes are kept
+    rather than a parsed form so nothing is lost in translation and a later
+    change to the evaluator needs no re-fetch.
+    """
+    folder = models.OneToOneField(Folder, on_delete=models.CASCADE, related_name='acl')
+    descriptor = models.BinaryField(help_text="Self-relative SECURITY_DESCRIPTOR (owner, group, DACL)")
+    owner_sid = models.CharField(max_length=190, blank=True)
+    ace_count = models.PositiveIntegerField(default=0)
+    fetched_at = models.DateTimeField()
+    error = models.TextField(blank=True, help_text="Last fetch error, empty when the descriptor is current")
+
+    class Meta:
+        verbose_name = 'ADAPT folder ACL'
+        verbose_name_plural = 'ADAPT folder ACLs'
+
+    def __str__(self):
+        return f'ACL for {self.folder.get_full_path()} ({self.ace_count} ACEs)'
+
+
+class DirectoryIdentity(models.Model):
+    """What Active Directory says about a user: their SID and every group SID they carry.
+
+    Populated at LDAP login from the constructed attribute tokenGroups, which
+    already has nested groups resolved by the domain controller. This is the
+    token the ADAPT access check evaluates against.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='directory_identity')
+    dn = models.CharField(max_length=512, blank=True, help_text="Distinguished name in the directory")
+    sid = models.CharField(max_length=190, blank=True, help_text="objectSid")
+    group_sids = models.JSONField(default=list, help_text="tokenGroups, as S-1-... strings")
+    fetched_at = models.DateTimeField()
+
+    class Meta:
+        verbose_name = 'directory identity'
+        verbose_name_plural = 'directory identities'
+
+    def __str__(self):
+        return f'{self.user.username}: {self.sid or "no SID"}, {len(self.group_sids or [])} groups'

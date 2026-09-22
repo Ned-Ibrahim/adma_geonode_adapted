@@ -20,6 +20,26 @@ import os
 from django.utils.text import slugify
 
 from .models import File, Folder
+from . import permissions
+
+
+def _files_in(user, folder):
+    """Files of `folder` the user may list: own files, every file of a readable ADAPT folder, else public ones."""
+    if folder.owner == user:
+        return File.objects.filter(folder=folder, owner=user)
+    if folder.third_party_source == 'adapt' and permissions.can_read(user, folder):
+        return File.objects.filter(folder=folder)
+    return File.objects.filter(folder=folder, is_public=True)
+
+
+def _subfolders_in(user, folder):
+    """Subfolders of `folder` the user may list. ADAPT children are checked one by one."""
+    if folder.owner == user:
+        return Folder.objects.filter(parent=folder, owner=user)
+    children = Folder.objects.filter(parent=folder)
+    if folder.third_party_source == 'adapt':
+        return children.filter(pk__in=[f.pk for f in permissions.filter_readable(user, children)])
+    return children.filter(is_public=True)
 from .serializers import (
     FileUploadSerializer, FolderUploadSerializer, FileDownloadSerializer,
     FolderDownloadSerializer, TokenCreateSerializer, FileSerializer, FolderSerializer
@@ -317,7 +337,7 @@ def api_download_file(request, file_id):
         file_obj = File.objects.get(id=file_id)
         
         # Check permissions
-        if file_obj.owner != request.user and not file_obj.is_public:
+        if not permissions.can_read(request.user, file_obj):
             return Response(
                 {'error': 'File not found or access denied'}, 
                 status=status.HTTP_404_NOT_FOUND
@@ -386,17 +406,12 @@ def api_list_files(request):
         try:
             folder = Folder.objects.get(id=folder_id)
             # User can access if they own the folder OR the folder is public
-            if folder.owner != request.user and not folder.is_public:
+            if not permissions.can_read(request.user, folder):
                 return Response(
                     {'error': 'You do not have permission to access this folder'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-            # List files in this folder (user's own files OR public files in public folder)
-            if folder.owner == request.user:
-                queryset = File.objects.filter(folder_id=folder_id, owner=request.user)
-            else:
-                # For public folders owned by others, only show public files
-                queryset = File.objects.filter(folder_id=folder_id, is_public=True)
+            queryset = _files_in(request.user, folder)
         except Folder.DoesNotExist:
             return Response(
                 {'error': 'Folder not found'},
@@ -467,17 +482,12 @@ def api_list_folders(request):
         try:
             parent_folder = Folder.objects.get(id=parent_id)
             # User can access if they own the folder OR the folder is public
-            if parent_folder.owner != request.user and not parent_folder.is_public:
+            if not permissions.can_read(request.user, parent_folder):
                 return Response(
                     {'error': 'You do not have permission to access this folder'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-            # List subfolders in this parent folder
-            if parent_folder.owner == request.user:
-                queryset = Folder.objects.filter(parent_id=parent_id, owner=request.user)
-            else:
-                # For public folders owned by others, only show public subfolders
-                queryset = Folder.objects.filter(parent_id=parent_id, is_public=True)
+            queryset = _subfolders_in(request.user, parent_folder)
         except Folder.DoesNotExist:
             return Response(
                 {'error': 'Parent folder not found'},
@@ -525,7 +535,7 @@ def api_download_folder(request, folder_id):
         folder = Folder.objects.get(id=folder_id)
         
         # Check permissions
-        if folder.owner != request.user and not folder.is_public:
+        if not permissions.can_read(request.user, folder):
             return Response(
                 {'error': 'Folder not found or access denied'}, 
                 status=status.HTTP_404_NOT_FOUND
@@ -546,7 +556,7 @@ def api_download_folder(request, folder_id):
                 nonlocal file_count, total_size
                 
                 # Add files from current folder
-                files = File.objects.filter(folder=current_folder, owner=request.user)
+                files = _files_in(request.user, current_folder)
                 for file_obj in files:
                     try:
                         # Create file path in ZIP
@@ -568,7 +578,7 @@ def api_download_folder(request, folder_id):
                 
                 # Recursively add subfolders if requested
                 if include_subfolders:
-                    subfolders = Folder.objects.filter(parent=current_folder, owner=request.user)
+                    subfolders = _subfolders_in(request.user, current_folder)
                     for subfolder in subfolders:
                         if zip_path:
                             subfolder_path = f"{zip_path}/{subfolder.name}"
@@ -632,7 +642,7 @@ def api_folder_info(request, folder_id):
         folder = Folder.objects.get(id=folder_id)
         
         # Check permissions
-        if folder.owner != request.user and not folder.is_public:
+        if not permissions.can_read(request.user, folder):
             return Response(
                 {'error': 'Folder not found or access denied'}, 
                 status=status.HTTP_404_NOT_FOUND
@@ -644,12 +654,12 @@ def api_folder_info(request, folder_id):
             total_size = 0
             
             # Count files in current folder
-            files = File.objects.filter(folder=current_folder, owner=request.user)
+            files = _files_in(request.user, current_folder)
             file_count += files.count()
             total_size += sum(f.file_size for f in files)
             
             # Recursively count subfolders
-            subfolders = Folder.objects.filter(parent=current_folder, owner=request.user)
+            subfolders = _subfolders_in(request.user, current_folder)
             for subfolder in subfolders:
                 sub_count, sub_size = count_folder_contents(subfolder)
                 file_count += sub_count

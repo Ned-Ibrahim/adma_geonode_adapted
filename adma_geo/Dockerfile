@@ -19,6 +19,8 @@ RUN apt-get update && apt-get install -y \
     proj-data \
     proj-bin \
     libspatialindex-dev \
+    libldap2-dev \
+    libsasl2-dev \
     wget \
     && rm -rf /var/lib/apt/lists/*
 

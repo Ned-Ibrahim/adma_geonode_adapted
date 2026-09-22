@@ -15,6 +15,7 @@ from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool
 from .forms import FolderForm, FileUploadForm
 from .tasks import process_gis_file_task
+from . import permissions
 
 def get_robust_user_statistics(user):
     """
@@ -367,6 +368,13 @@ def dashboard(request):
     ).filter(
         Q(owner=user) | Q(is_public=True)  # User's own OR public
     ).distinct().order_by('third_party_source', 'name')
+    # ADAPT roots are private and owned by the sync account; show them to users
+    # whose Active Directory token grants them something on the share.
+    adapt_roots = permissions.readable_adapt_roots(user)
+    if adapt_roots:
+        third_party_folders = Folder.objects.filter(
+            Q(pk__in=third_party_folders.values_list('pk', flat=True)) | Q(pk__in=[f.pk for f in adapt_roots])
+        ).distinct().order_by('third_party_source', 'name')
     
     third_party_files = File.objects.filter(
         is_third_party=True,
@@ -399,13 +407,19 @@ def folder_detail(request, folder_id):
     folder = get_object_or_404(Folder, id=folder_id)
     
     # Check permissions
-    if folder.owner != request.user and not folder.is_public:
+    if not permissions.can_read(request.user, folder):
         messages.error(request, "You don't have permission to view this folder.")
         return redirect('filemanager:dashboard')
     
     # Get subfolders and files with pagination (exclude items being deleted)
     subfolders_queryset = folder.subfolders.filter(deletion_in_progress=False).order_by('name')
     files_queryset = folder.files.filter(deletion_in_progress=False).order_by('-created_at')
+    if folder.is_third_party and folder.third_party_source == 'adapt':
+        # Inside the ADAPT tree each subfolder carries its own descriptor, so the
+        # listing is filtered per child. Files take their folder's descriptor.
+        subfolders_queryset = Folder.objects.filter(
+            pk__in=[f.pk for f in permissions.filter_readable(request.user, subfolders_queryset)]
+        ).order_by('name')
     
     # Combine subfolders and files for pagination
     page = request.GET.get('page', 1)
@@ -608,7 +622,7 @@ def folder_detail(request, folder_id):
         'subfolders': subfolders,
         'files': files,
         'breadcrumbs': folder.get_breadcrumbs(),
-        'can_edit': folder.owner == request.user,
+        'can_edit': permissions.can_write(request.user, folder),
         'is_public_view': False,
         'page_obj': page_obj,
         'total_items': total_items,
@@ -869,7 +883,7 @@ def file_detail(request, file_id):
     file_obj = get_object_or_404(File, id=file_id)
     
     # Check permissions
-    if file_obj.owner != request.user and not file_obj.is_public:
+    if not permissions.can_read(request.user, file_obj):
         messages.error(request, "You don't have permission to view this file.")
         return redirect('filemanager:dashboard')
     
@@ -999,7 +1013,7 @@ def file_detail(request, file_id):
         'file_content': file_content,
         'csv_data': json.dumps(csv_data) if csv_data else None,
         'csv_headers': json.dumps(csv_headers) if csv_headers else None,
-        'can_edit': file_obj.owner == request.user,
+        'can_edit': permissions.can_write(request.user, file_obj),
         'is_realm5_observation': is_realm5_observation,
         'realm5_observation_data': json.dumps(realm5_observation_data) if realm5_observation_data else None,
         'realm5_variables': json.dumps(realm5_variables) if realm5_variables else None,
@@ -1274,7 +1288,7 @@ def download_file(request, file_id):
     file_obj = get_object_or_404(File, id=file_id)
     
     # Check permissions
-    if file_obj.owner != request.user and not file_obj.is_public:
+    if not permissions.can_read(request.user, file_obj):
         raise Http404("File not found")
     
     # Referenced files have no media URL, so previews come back through this view
@@ -1486,7 +1500,7 @@ def map_viewer(request, file_id):
     file_obj = get_object_or_404(File, id=file_id)
     
     # Check permissions
-    if file_obj.owner != request.user and not file_obj.is_public:
+    if not permissions.can_read(request.user, file_obj):
         messages.error(request, "You don't have permission to view this file.")
         return redirect('filemanager:dashboard')
     

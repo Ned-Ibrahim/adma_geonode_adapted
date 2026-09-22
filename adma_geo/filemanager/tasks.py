@@ -1860,3 +1860,17 @@ def sync_johndeere_scheduled():
     """
     logger.info("Running scheduled John Deere sync...")
     return sync_johndeere_task.delay()
+
+
+@shared_task
+def sync_adapt_acls_task():
+    """Re-fetch every ADAPT folder's security descriptor from the share."""
+    from django.core.management import call_command
+    call_command('sync_adapt_acls')
+
+
+@shared_task
+def refresh_directory_identities_task():
+    """Re-read tokenGroups for every user who has logged in through LDAP."""
+    from django.core.management import call_command
+    call_command('refresh_directory_identities')

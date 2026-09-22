@@ -222,3 +222,24 @@ def remove_folder_directory(sender, instance, **kwargs):
         logger.info("Removed empty media directory for folder '%s'", instance.name)
     except Exception as e:
         logger.error("Could not remove media directory for folder %s: %s", instance.pk, e)
+
+
+# ---------------------------------------------------------------------------
+# Active Directory identity capture (see filemanager/directory.py)
+# ---------------------------------------------------------------------------
+from django.contrib.auth import get_user_model as _get_user_model
+from . import directory as _directory
+
+try:
+    from django_auth_ldap.backend import populate_user as _ldap_populate_user
+except ImportError:  # django-auth-ldap not installed on this host
+    _ldap_populate_user = None
+
+if _ldap_populate_user is not None:
+    _ldap_populate_user.connect(_directory.on_populate_user, dispatch_uid='filemanager.directory.populate')
+
+
+@receiver(post_save, sender=_get_user_model())
+def persist_pending_directory_identity(sender, instance, **kwargs):
+    """First LDAP login: populate_user fires before the user row exists. Finish the write here."""
+    _directory.flush_pending_identity(instance)
