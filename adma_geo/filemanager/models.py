@@ -1040,3 +1040,54 @@ class Tool(models.Model):
             created_tools.append((tool, created))
         
         return created_tools
+
+
+class FolderGrant(models.Model):
+    """Access to an ADAPT folder and everything beneath it, for one user or one group.
+
+    ADMA reads the ADAPT share through a single account that sees all of it, so
+    the share's own permissions never reach ADMA users. Who sees which folder is
+    decided here instead, by an administrator. See filemanager.permissions.
+    """
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='grants')
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, null=True, blank=True, related_name='folder_grants',
+    )
+    group = models.ForeignKey(
+        'auth.Group', on_delete=models.CASCADE, null=True, blank=True, related_name='folder_grants',
+    )
+    can_write = models.BooleanField(
+        default=False,
+        help_text="Also allow uploads and changes. Has no effect while the share is mounted read-only.",
+    )
+    granted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['folder__name']
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(user__isnull=False, group__isnull=True)
+                    | models.Q(user__isnull=True, group__isnull=False)
+                ),
+                name='foldergrant_user_xor_group',
+                violation_error_message='Choose a user or a group, not both and not neither.',
+            ),
+            models.UniqueConstraint(
+                fields=['folder', 'user'], condition=models.Q(user__isnull=False),
+                name='foldergrant_unique_user',
+                violation_error_message='This user already has a grant on this folder. Edit that grant instead.',
+            ),
+            models.UniqueConstraint(
+                fields=['folder', 'group'], condition=models.Q(group__isnull=False),
+                name='foldergrant_unique_group',
+                violation_error_message='This group already has a grant on this folder. Edit that grant instead.',
+            ),
+        ]
+
+    def __str__(self):
+        who = self.user.username if self.user_id else f'group {self.group.name}'
+        return f"{who} {'read/write' if self.can_write else 'read'} {self.folder.get_full_path()}"

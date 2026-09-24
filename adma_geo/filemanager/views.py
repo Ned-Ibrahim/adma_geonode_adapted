@@ -15,6 +15,7 @@ from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool
 from .forms import FolderForm, FileUploadForm
 from .tasks import process_gis_file_task
+from . import permissions
 
 def get_robust_user_statistics(user):
     """
@@ -360,12 +361,17 @@ def dashboard(request):
     # Get third-party data visible to the current user:
     # - User's own third-party folders/files
     # - Public third-party folders/files from other users
+    # - ADAPT roots only through a FolderGrant (see permissions), never by owner or is_public
     third_party_folders = Folder.objects.filter(
         is_third_party=True,
         deletion_in_progress=False,
         parent=None  # Only top-level third-party folders
     ).filter(
         Q(owner=user) | Q(is_public=True)  # User's own OR public
+    ).exclude(third_party_source='adapt')
+    adapt_root_ids = [f.pk for f in permissions.readable_adapt_roots(user)]
+    third_party_folders = Folder.objects.filter(
+        Q(pk__in=third_party_folders.values_list('pk', flat=True)) | Q(pk__in=adapt_root_ids)
     ).distinct().order_by('third_party_source', 'name')
     
     third_party_files = File.objects.filter(
@@ -399,13 +405,21 @@ def folder_detail(request, folder_id):
     folder = get_object_or_404(Folder, id=folder_id)
     
     # Check permissions
-    if folder.owner != request.user and not folder.is_public:
+    if not permissions.can_read(request.user, folder):
         messages.error(request, "You don't have permission to view this folder.")
         return redirect('filemanager:dashboard')
     
     # Get subfolders and files with pagination (exclude items being deleted)
     subfolders_queryset = folder.subfolders.filter(deletion_in_progress=False).order_by('name')
     files_queryset = folder.files.filter(deletion_in_progress=False).order_by('-created_at')
+    if folder.is_third_party and folder.third_party_source == 'adapt':
+        # Inside the ADAPT tree only granted branches are listed, and files only
+        # when the folder itself is covered by a grant, not merely on the way to one.
+        subfolders_queryset = Folder.objects.filter(
+            pk__in=[f.pk for f in permissions.filter_readable(request.user, subfolders_queryset)]
+        ).order_by('name')
+        if not permissions.can_list_files(request.user, folder):
+            files_queryset = files_queryset.none()
     
     # Combine subfolders and files for pagination
     page = request.GET.get('page', 1)
@@ -629,7 +643,7 @@ def folder_detail(request, folder_id):
 
 def public_folder_detail(request, folder_id):
     """Public view of folder contents"""
-    folder = get_object_or_404(Folder, id=folder_id, is_public=True)
+    folder = get_object_or_404(Folder.objects.exclude(third_party_source='adapt'), id=folder_id, is_public=True)
     
     # If user is authenticated and owns this folder, redirect to dashboard
     if request.user.is_authenticated and folder.owner == request.user:
@@ -869,7 +883,7 @@ def file_detail(request, file_id):
     file_obj = get_object_or_404(File, id=file_id)
     
     # Check permissions
-    if file_obj.owner != request.user and not file_obj.is_public:
+    if not permissions.can_read(request.user, file_obj):
         messages.error(request, "You don't have permission to view this file.")
         return redirect('filemanager:dashboard')
     
@@ -1010,7 +1024,7 @@ def file_detail(request, file_id):
 
 def public_file_detail(request, file_id):
     """Public view of file details"""
-    file_obj = get_object_or_404(File, id=file_id, is_public=True)
+    file_obj = get_object_or_404(File.objects.exclude(third_party_source='adapt'), id=file_id, is_public=True)
     
     # If user is authenticated and owns this file, redirect to dashboard
     if request.user.is_authenticated and file_obj.owner == request.user:
@@ -1274,7 +1288,7 @@ def download_file(request, file_id):
     file_obj = get_object_or_404(File, id=file_id)
     
     # Check permissions
-    if file_obj.owner != request.user and not file_obj.is_public:
+    if not permissions.can_read(request.user, file_obj):
         raise Http404("File not found")
     
     # Referenced files have no media URL, so previews come back through this view
@@ -1486,7 +1500,7 @@ def map_viewer(request, file_id):
     file_obj = get_object_or_404(File, id=file_id)
     
     # Check permissions
-    if file_obj.owner != request.user and not file_obj.is_public:
+    if not permissions.can_read(request.user, file_obj):
         messages.error(request, "You don't have permission to view this file.")
         return redirect('filemanager:dashboard')
     
@@ -1552,7 +1566,7 @@ def map_viewer(request, file_id):
 
 def public_map_viewer(request, file_id):
     """Public view of GIS file on a map"""
-    file_obj = get_object_or_404(File, id=file_id, is_public=True, is_spatial=True)
+    file_obj = get_object_or_404(File.objects.exclude(third_party_source='adapt'), id=file_id, is_public=True, is_spatial=True)
     
     # If user is authenticated and owns this file, redirect to dashboard map view
     if request.user.is_authenticated and file_obj.owner == request.user:

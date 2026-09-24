@@ -10,6 +10,7 @@ with support for name matching, type filtering, visibility, and file types.
 from django.db.models import Q
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from .models import File, Folder, Map
+from . import permissions
 import logging
 
 logger = logging.getLogger(__name__)
@@ -171,9 +172,10 @@ class SearchEngine:
     def _get_base_file_queryset(self, user):
         """Get base file queryset with proper permissions."""
         if user.is_authenticated:
-            # Authenticated user: their files + public files
+            # Authenticated user: their files + public files + granted ADAPT files.
+            # ADAPT rows are never public, whatever their flag says.
             return File.objects.filter(
-                Q(owner=user) | Q(is_public=True)
+                Q(owner=user) | (Q(is_public=True) & ~Q(third_party_source='adapt')) | self._adapt_files(user)
             ).exclude(deletion_in_progress=True).order_by('name')
         else:
             # Anonymous user: only public files
@@ -184,9 +186,10 @@ class SearchEngine:
     def _get_base_folder_queryset(self, user):
         """Get base folder queryset with proper permissions."""
         if user.is_authenticated:
-            # Authenticated user: their folders + public folders
+            # Authenticated user: their folders + public folders + granted ADAPT folders.
+            # ADAPT rows are never public, whatever their flag says.
             return Folder.objects.filter(
-                Q(owner=user) | Q(is_public=True)
+                Q(owner=user) | (Q(is_public=True) & ~Q(third_party_source='adapt')) | self._adapt_folders(user)
             ).exclude(deletion_in_progress=True).order_by('name')
         else:
             # Anonymous user: only public folders
@@ -194,6 +197,18 @@ class SearchEngine:
                 is_public=True
             ).exclude(deletion_in_progress=True).order_by('name')
     
+    def _adapt_files(self, user):
+        """ADAPT files the user may find: those inside a granted folder's subtree."""
+        if user.is_superuser:
+            return Q(third_party_source='adapt')
+        return Q(third_party_source='adapt', folder_id__in=permissions.adapt_folder_ids(user))
+
+    def _adapt_folders(self, user):
+        """ADAPT folders the user may find: granted subtrees and the folders leading to them."""
+        if user.is_superuser:
+            return Q(third_party_source='adapt')
+        return Q(third_party_source='adapt', pk__in=permissions.adapt_folder_ids(user, include_path=True))
+
     def _get_base_map_queryset(self, user):
         """Get base map queryset with proper permissions."""
         if user.is_authenticated:
