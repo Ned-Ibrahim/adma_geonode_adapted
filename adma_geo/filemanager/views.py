@@ -1850,6 +1850,16 @@ def dashboard_stats(request):
     
     return JsonResponse({'success': False, 'error': 'Method not allowed'})
 
+
+def auth_check(request):
+    """Answer nginx auth_request subrequests for /media/ and GeoServer.
+
+    nginx serves those paths itself, so Django never sees the request. nginx asks
+    here first, forwarding the session cookie: 204 lets it through, 401 refuses.
+    """
+    return HttpResponse(status=204 if request.user.is_authenticated else 401)
+
+
 class DocumentationView(TemplateView):
     """Documentation page view"""
     template_name = 'filemanager/documentation.html'
