@@ -36,6 +36,10 @@ only open to navigate towards a grant further down does not count. The snr18
 side is worked out from the export and the roster alone: Windows inheritance
 over the exported entries, with group membership taken from the roster.
 
+Team folders the export names but the catalogue lacks fail the check, unless
+--allow-missing is passed; then they are only listed. Folder names compare
+without case, as on the share.
+
 BUILTIN\\Users holds every domain account on snr18, so check counts it as
 every roster user. import cannot map it, so access that snr18 gives only
 through BUILTIN\\Users is not a failure: where ADMA gives the same access
@@ -48,6 +52,7 @@ they are listed per folder.
     python manage.py adapt_acl import acl.csv
     python manage.py adapt_acl import acl.csv --apply
     python manage.py adapt_acl check acl.csv --roster roster.csv
+    python manage.py adapt_acl check acl.csv --roster roster.csv --allow-missing
 """
 import re
 from collections import defaultdict
@@ -64,6 +69,7 @@ from filemanager.ntfs_acl import (
     EVERY_DOMAIN_USER,
     Acl,
     ExportError,
+    path_key,
     path_text,
     read_export,
 )
@@ -119,16 +125,16 @@ class Catalogue:
         ).first()
         if self.root is None:
             raise CommandError('No ADAPT root folder. Run setup_adapt and sync_adapt first.')
-        self.children = {}
+        self.children = {}               # (parent id, name without case) -> folder id
         rows = Folder.objects.filter(third_party_source='adapt', deletion_in_progress=False)
         for pk, parent_id, name in rows.values_list('id', 'parent_id', 'name'):
-            self.children[(parent_id, name)] = pk
+            self.children[(parent_id, name.lower())] = pk
 
     def find(self, path):
-        """Folder id for an export path, or None."""
+        """Folder id for an export path, or None. Names compare without case, as on the share."""
         pk = self.root.pk
         for name in path:
-            pk = self.children.get((pk, name))
+            pk = self.children.get((pk, name.lower()))
             if pk is None:
                 return None
         return pk
@@ -148,13 +154,15 @@ class Command(BaseCommand):
         check = sub.add_parser('check', help='Compare ADMA access with snr18 for every roster user')
         check.add_argument('export', help='snr18 ACL export (CSV)')
         check.add_argument('--roster', required=True, help='Roster CSV, as for adapt_users load')
+        check.add_argument('--allow-missing', action='store_true',
+                           help='List team folders the export names but the catalogue lacks instead of failing')
 
     def handle(self, *args, **options):
         entries = self._read(options['export'])
         if options['action'] == 'import':
             self._import(entries, options['apply'])
         else:
-            self._check(entries, options['roster'])
+            self._check(entries, options['roster'], options['allow_missing'])
 
     def _read(self, path):
         try:
@@ -180,7 +188,7 @@ class Command(BaseCommand):
         wanted = {}                      # (folder id, kind, principal pk) -> [can_write, principal, path]
         skipped = defaultdict(list)      # (identity, reason) -> entries on known folders
         skipped_elsewhere = defaultdict(int)
-        unknown = set()
+        unknown = {}                     # path_key -> path, as the export first spells it
         lost = []                        # entries for ADMA users or groups on folders the catalogue lacks
         warnings = []
 
@@ -190,7 +198,7 @@ class Command(BaseCommand):
             if principal and not (e.reads or e.writes):
                 principal, reason = None, f'rights {e.rights_text} give neither read nor write'
             if folder_id is None:
-                unknown.add(e.path)
+                unknown.setdefault(path_key(e.path), e.path)
                 if principal is None:
                     skipped_elsewhere[(e.identity, reason)] += 1
                 else:
@@ -240,7 +248,7 @@ class Command(BaseCommand):
         self._section('Grants to remove', [text for *_, text in sorted(removed(existing[k]) for k in remove)])
         self._section('Not imported:', self._skipped_lines(skipped, skipped_elsewhere), plain=True)
         self._section(f'Folders not in the catalogue ({plural(len(unknown), "folder")}; their entries are skipped):',
-                      self._unknown_lines(unknown), plain=True)
+                      self._unknown_lines(unknown.values()), plain=True)
         self._section('Grants these folders would carry, not imported:', sorted(lost), plain=True)
         self._section('Warnings:', [f'  {w}' for w in warnings], plain=True)
 
@@ -362,7 +370,7 @@ class Command(BaseCommand):
 
     # check
 
-    def _check(self, entries, roster_path):
+    def _check(self, entries, roster_path, allow_missing=False):
         rows, failures, _ = read_roster(roster_path)
         if failures:
             problems = '; '.join(f'line {line}: {message}' for line, message, _, _ in failures)
@@ -404,7 +412,8 @@ class Command(BaseCommand):
                 cells[(row.nuid, folder.pk)] = f'{self._cell(*adma)}/{self._cell(*snr18)}{mark}'
 
         self._matrix(rows, accounts, folders, cells)
-        missing = sorted({e.path[0] for e in entries if e.path} - {f.name for f in folders})
+        known = {f.name.lower() for f in folders}
+        missing = sorted({e.path[0] for e in entries if e.path and e.path[0].lower() not in known}, key=str.lower)
         if missing:
             self.stdout.write(self.style.WARNING(
                 f'Team folders in the export but not in the catalogue, so not checked: {", ".join(missing)}'))
@@ -423,6 +432,10 @@ class Command(BaseCommand):
                           f'{len(accepted)} accepted, {len(notes)} through a built-in group only.')
         if mismatches:
             raise CommandError(f'ADMA differs from snr18 in {plural(len(mismatches), "place")}; see Mismatches above.')
+        if missing and not allow_missing:
+            raise CommandError(f'{plural(len(missing), "team folder")} in the export '
+                               f'{"is" if len(missing) == 1 else "are"} not in the catalogue: {", ".join(missing)}. '
+                               'Run sync_adapt, or pass --allow-missing to check the rest.')
 
     @staticmethod
     def _cell(read, write):

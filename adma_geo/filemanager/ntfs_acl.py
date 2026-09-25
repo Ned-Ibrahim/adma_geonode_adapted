@@ -181,6 +181,11 @@ def split_path(text) -> tuple[str, ...]:
     return tuple(part for part in text.split('\\') if part)
 
 
+def path_key(path) -> tuple[str, ...]:
+    """A path for lookups: NTFS compares names without case, so "Soils" and "SOILS" are one folder."""
+    return tuple(part.lower() for part in path)
+
+
 def path_text(path) -> str:
     return '\\'.join(path) if path else ROOT
 
@@ -226,19 +231,20 @@ class Acl:
     (ContainerInherit), and NoPropagateInherit entries only to the parent's direct
     children. The walk stops at a folder that blocks inheritance (Protected).
     Folders the export does not list have no entries of their own and inherit.
+    Paths compare without case, as on NTFS.
     Only Allow entries count: adapt_acl refuses an export with Deny entries.
     """
 
     def __init__(self, entries: Iterable[Entry]):
-        self.explicit = {}
-        self.protected = set()
+        self.explicit = {}               # path_key -> entries
+        self.protected = set()           # path_keys
         for e in entries:
-            self.explicit.setdefault(e.path, []).append(e)
+            self.explicit.setdefault(path_key(e.path), []).append(e)
             if e.protected:
-                self.protected.add(e.path)
+                self.protected.add(path_key(e.path))
 
     def effective(self, path) -> list[Entry]:
-        path = tuple(path)
+        path = path_key(path)
         found = [e for e in self.explicit.get(path, ()) if not e.inherit_only]
         child, distance = path, 1
         while child and child not in self.protected:

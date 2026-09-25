@@ -245,6 +245,11 @@ class Import(AclTree):
         self.assertIsNone(error)
         self.assertIn('BUILTIN\\Users', out.split('Not imported:')[1])
 
+    def test_export_paths_find_folders_without_case(self):
+        out, _ = self.import_export(HEADER + entry('soils\\2024', 'NEAD\\00000002', 'FullControl'), '--apply')
+        self.assertEqual(self.grants(), {('ADAPT/Soils/2024', 'user:bob2'): 'write'})
+        self.assertNotIn('not in the catalogue (1', out)
+
     def test_inherited_entries_are_skipped_when_the_export_marks_them(self):
         text = ('"Path","Protected","Identity","Rights","Type","AppliesTo","IsInherited"\n'
                 f'"Soils","False","NEAD\\00000002","FullControl","Allow","{ALL}","True"\n'
@@ -308,6 +313,12 @@ class WindowsInheritance(SimpleTestCase):
         tree = acl(('A', 'NEAD\\u1', READ, False, 'ObjectInherit/None'))
         self.assertEqual(tree.access(('A',), {'NEAD\\u1'}), (True, False))
         self.assertEqual(tree.access(('A', 'B'), {'NEAD\\u1'}), (False, False))
+
+    def test_paths_compare_without_case(self):
+        tree = acl(('grazing SYSTEMS', 'NEAD\\u1', 'FullControl', True, ALL),
+                   ('(root)', 'NEAD\\u2', READ, True, ALL))
+        self.assertEqual(tree.access(('Grazing Systems', 'Plots'), {'NEAD\\u1'}), (True, True))
+        self.assertEqual(tree.access(('Grazing Systems',), {'NEAD\\u2'}), (False, False))
 
     def test_identities_compare_without_case(self):
         tree = acl(('A', 'NEAD\\SNR_Team', READ, False, ALL))
@@ -486,6 +497,26 @@ class Check(AclTree):
         self.assertIn('Soils: BUILTIN\\Administrators (write)', section)
         self.assertNotIn('Flux Measurements: BUILTIN', section)
 
-    def test_team_folders_the_catalogue_lacks_are_named(self):
-        out, _ = self.check(MATCHING + entry('Range Science', 'NEAD\\00000002', 'FullControl'))
+    def check_with(self, export, *extra):
+        path = self.write('acl.csv', export)
+        self.run_acl('import', path, '--apply')
+        return self.run_acl('check', path, '--roster', self.write('roster.csv', ROSTER), *extra)
+
+    def test_team_folders_the_catalogue_lacks_fail_the_check(self):
+        out, error = self.check_with(MATCHING + entry('Range Science', 'NEAD\\00000002', 'FullControl'))
+        self.assertIsNotNone(error)
+        self.assertIn('Range Science', str(error))
+        self.assertIn('--allow-missing', str(error))
+
+    def test_allow_missing_lists_them_and_passes(self):
+        out, error = self.check_with(MATCHING + entry('Range Science', 'NEAD\\00000002', 'FullControl'),
+                                     '--allow-missing')
+        self.assertIsNone(error)
         self.assertIn('not in the catalogue, so not checked: Range Science', out)
+
+    def test_folder_names_match_without_case(self):
+        export = MATCHING.replace('"Grazing Systems"', '"GRAZING systems"')
+        out, error = self.check_with(export)
+        self.assertIsNone(error)
+        self.assertEqual(self.matrix(out)['bob2']['Grazing Systems'], 'W/W')
+        self.assertNotIn('not in the catalogue', out)
