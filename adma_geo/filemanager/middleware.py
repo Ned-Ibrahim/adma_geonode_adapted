@@ -22,7 +22,7 @@ from .models import must_change_password
 # - /api/v1/ authenticates with DRF tokens inside each view, which this
 #   middleware cannot see; DRF's default IsAuthenticated permission guards it.
 # - /auth/check/ answers nginx's auth_request subrequests with 204 or 401.
-# - /static/ holds CSS and JS for the login page.
+# - /static/ holds CSS and JS for the login page, and /favicon.ico its icon.
 EXEMPT_PREFIXES = (
     '/accounts/login/',
     '/accounts/logout/',
@@ -30,6 +30,7 @@ EXEMPT_PREFIXES = (
     '/api/v1/',
     '/auth/check/',
     '/static/',
+    '/favicon.ico',
 )
 
 
@@ -52,13 +53,14 @@ class LoginRequiredMiddleware:
 #
 # - The login and logout pages, and the change password form itself.
 # - /auth/check/ refuses such a user itself, as nginx needs a 401, not a redirect.
-# - /static/ holds CSS and JS for the form.
+# - /static/ holds CSS and JS for the form, and /favicon.ico its icon.
 PASSWORD_CHANGE_EXEMPT_PREFIXES = (
     '/accounts/login/',
     '/accounts/logout/',
     '/accounts/password_change/',
     '/auth/check/',
     '/static/',
+    '/favicon.ico',
 )
 
 PASSWORD_CHANGE_MESSAGE = 'You must change your password before using ADMA. Sign in to the website to change it.'

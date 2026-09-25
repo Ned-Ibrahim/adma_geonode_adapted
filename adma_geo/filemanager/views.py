@@ -12,6 +12,7 @@ from django.http import JsonResponse, HttpResponse, Http404, FileResponse
 from django.db.models import Q, Count, Sum
 from django.urls import reverse_lazy
 from django.conf import settings
+from django.contrib.staticfiles import finders
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
 from .forms import FolderForm, FileUploadForm, NewPasswordChangeForm
@@ -1882,6 +1883,21 @@ def auth_check(request):
     """
     allowed = request.user.is_authenticated and not must_change_password(request.user)
     return HttpResponse(status=204 if allowed else 401)
+
+
+def favicon(request):
+    """Serve static/favicon.ico at /favicon.ico, where browsers look for it.
+
+    Served by Django rather than from /static/ so it works whether or not a
+    static file server sits in front, and exempt from the login requirement so
+    the login page has its icon too.
+    """
+    path = finders.find('favicon.ico')
+    if path is None:
+        raise Http404('No favicon')
+    response = FileResponse(open(path, 'rb'), content_type='image/x-icon')
+    response['Cache-Control'] = 'public, max-age=86400'
+    return response
 
 
 class ChangePasswordView(PasswordChangeView):

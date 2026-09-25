@@ -9,6 +9,7 @@ urlpatterns = [
     # Public URLs
     path('', views.HomeView.as_view(), name='home'),
     path('auth/check/', views.auth_check, name='auth_check'),
+    path('favicon.ico', views.favicon, name='favicon'),
     path('search/', views.SearchView.as_view(), name='search'),
     path('documentation/', views.DocumentationView.as_view(), name='documentation'),
     path('public/folder/<uuid:folder_id>/', views.public_folder_detail, name='public_folder_detail'),
