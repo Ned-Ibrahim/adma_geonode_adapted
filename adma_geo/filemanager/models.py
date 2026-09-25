@@ -1,4 +1,3 @@
-import os
 import uuid
 from pathlib import Path
 from django.core.validators import RegexValidator
@@ -182,7 +181,6 @@ class Folder(models.Model):
     def content_summary(self):
         """Get a summary of folder contents for display (e.g., '3 folders, 81 files')"""
         subfolder_count = self.subfolder_count
-        direct_file_count = self.file_count
         total_files = self.total_file_count
         
         parts = []
@@ -549,7 +547,7 @@ class Map(models.Model):
         # Build comprehensive metadata string
         metadata_parts = [
             f"Map name: {self.name}",
-            f"Map type: composite spatial map",
+            "Map type: composite spatial map",
             f"Owner: {self.owner.username}",
             f"Visibility: {visibility}",
             f"Layer count: {layer_count}",
