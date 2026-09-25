@@ -1098,6 +1098,9 @@ class UserProfile(models.Model):
     The NUID is the University of Nebraska ID. The ADAPT roster and the snr18
     permission export name people by it (NEAD\\<NUID>), so it is how both reach
     an ADMA account. Accounts made by hand have no NUID.
+
+    must_change_password holds a user on the change password form. An account
+    without a profile is never held.
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     nuid = models.CharField(
@@ -1105,6 +1108,19 @@ class UserProfile(models.Model):
         validators=[RegexValidator(r'^\d{8}$', 'A NUID is 8 digits, leading zeros included.')],
         help_text='University of Nebraska ID, 8 digits. Set by adapt_users load.',
     )
+    must_change_password = models.BooleanField(
+        default=False,
+        help_text='Send this user to the change password form until they choose a new password. '
+                  'Set for accounts adapt_users load creates; cleared when the user changes it.',
+    )
 
     def __str__(self):
         return f'{self.user.username} ({self.nuid or "no NUID"})'
+
+
+def must_change_password(user):
+    """True while the user is held on the change password form."""
+    try:
+        return user.profile.must_change_password
+    except UserProfile.DoesNotExist:
+        return False

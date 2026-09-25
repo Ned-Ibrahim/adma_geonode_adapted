@@ -5,6 +5,7 @@ from pathlib import Path
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.views import PasswordChangeView
 from django.contrib import messages
 from django.views.generic import CreateView, TemplateView
 from django.http import JsonResponse, HttpResponse, Http404, FileResponse
@@ -12,8 +13,8 @@ from django.db.models import Q, Count, Sum
 from django.urls import reverse_lazy
 from django.conf import settings
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
-from .models import Folder, File, Map, Tool
-from .forms import FolderForm, FileUploadForm
+from .models import Folder, File, Map, Tool, UserProfile, must_change_password
+from .forms import FolderForm, FileUploadForm, NewPasswordChangeForm
 from .tasks import process_gis_file_task
 from . import permissions
 
@@ -1877,8 +1878,27 @@ def auth_check(request):
 
     nginx serves those paths itself, so Django never sees the request. nginx asks
     here first, forwarding the session cookie: 204 lets it through, 401 refuses.
+    A user who must change their password is refused too.
     """
-    return HttpResponse(status=204 if request.user.is_authenticated else 401)
+    allowed = request.user.is_authenticated and not must_change_password(request.user)
+    return HttpResponse(status=204 if allowed else 401)
+
+
+class ChangePasswordView(PasswordChangeView):
+    """Change the signed-in user's password, and release them if they were held on this form."""
+    form_class = NewPasswordChangeForm
+    success_url = reverse_lazy('filemanager:dashboard')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['forced'] = must_change_password(self.request.user)
+        return context
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        UserProfile.objects.filter(user=self.request.user).update(must_change_password=False)
+        messages.success(self.request, 'Your password has been changed.')
+        return response
 
 
 class DocumentationView(TemplateView):

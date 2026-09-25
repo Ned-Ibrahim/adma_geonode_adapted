@@ -89,6 +89,10 @@ class FirstLoad(LoadTest):
                 self.assertTrue(user.check_password(password))
                 self.assertNotIn(password, user.password)
 
+    def test_new_accounts_must_change_the_one_time_password(self):
+        self.load(ROSTER)
+        self.assertEqual(UserProfile.objects.filter(must_change_password=True).count(), 3)
+
     def test_nuid_keeps_leading_zeros_and_finds_the_user(self):
         self.load(ROSTER)
         self.assertEqual(UserProfile.objects.get(nuid='00000003').user.username, 'carol3')
@@ -132,6 +136,11 @@ class Rerun(LoadTest):
         with self.assertRaises(StopIteration):
             self.printed_passwords(out)
 
+    def test_a_rerun_does_not_flag_existing_accounts_again(self):
+        UserProfile.objects.update(must_change_password=False)
+        self.load(ROSTER)
+        self.assertFalse(UserProfile.objects.filter(must_change_password=True).exists())
+
     def test_name_email_and_group_changes_are_applied_and_reported(self):
         roster = HEADER + (
             '00000001,alice.a,Alice Anders-Lee,snr_adapt_all\n'
@@ -165,6 +174,7 @@ class Rerun(LoadTest):
         dave = User.objects.get(username='dave4')
         self.assertEqual(dave.profile.nuid, '00000004')
         self.assertTrue(dave.check_password('kept-pw'))
+        self.assertFalse(dave.profile.must_change_password)
         with self.assertRaises(StopIteration):
             self.printed_passwords(out)
         self.assertIn('dave4: NUID set to 00000004', out)

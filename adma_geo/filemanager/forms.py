@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import PasswordChangeForm
 from .models import Folder, File
 
 User = get_user_model()
@@ -42,3 +43,18 @@ class FileUploadForm(forms.Form):
             'class': 'form-check-input'
         })
     )
+
+
+class NewPasswordChangeForm(PasswordChangeForm):
+    """Django's change password form, refusing to keep the current password.
+
+    An account made by the roster loader starts with a one-time password that was
+    printed in a table. Typing it again as the new one would defeat the change.
+    """
+
+    def clean(self):
+        cleaned_data = super().clean()
+        new_password = cleaned_data.get('new_password1')
+        if new_password and self.user.check_password(new_password):
+            self.add_error('new_password1', 'Choose a password different from your current one.')
+        return cleaned_data

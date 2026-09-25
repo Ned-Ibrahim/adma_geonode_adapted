@@ -76,6 +76,7 @@ def finish_new_account(user):
     password = new_password()
     user.set_password(password)
     user.save(update_fields=['password'])
+    UserProfile.objects.filter(user=user).update(must_change_password=True)
     return password
 
 
