@@ -404,7 +404,7 @@ ROOT_ENTRIES = (
 MATCHING = HEADER + ROOT_ENTRIES + entry('Flux Measurements', 'NEAD\\00000003', READ, protected=True)
 
 
-class Check(AclTree):
+class CheckTree(AclTree):
     """Folders in the matrix: Flux Measurements, Grazing Systems, Soils (by name)."""
 
     FOLDERS = ('Flux Measurements', 'Grazing Systems', 'Soils')
@@ -428,6 +428,9 @@ class Check(AclTree):
             rows[name] = dict(zip(self.FOLDERS, cells))
         return rows
 
+
+class Check(CheckTree):
+
     def test_a_team_member_writes_their_team_folder_and_reads_the_others(self):
         out, error = self.check()
         self.assertIsNone(error)
@@ -449,7 +452,7 @@ class Check(AclTree):
     def test_matching_access_passes_with_no_mismatches(self):
         out, error = self.check()
         self.assertIsNone(error)
-        self.assertIn('4 users, 3 folders: 0 mismatches', out)
+        self.assertIn('4 users, 3 team folders, 1 other folder: 0 mismatches', out)
 
     def test_a_protected_folder_cuts_inheritance_and_the_adma_grant_above_it_is_a_mismatch(self):
         out, error = self.check(HEADER + ROOT_ENTRIES)
@@ -520,3 +523,69 @@ class Check(AclTree):
         self.assertIsNone(error)
         self.assertEqual(self.matrix(out)['bob2']['Grazing Systems'], 'W/W')
         self.assertNotIn('not in the catalogue', out)
+
+
+NO_PROPAGATE = 'ContainerInherit, ObjectInherit/NoPropagateInherit'
+
+
+class CheckBelowTeamFolders(CheckTree):
+    """Flux Measurements/Tower/2019 and /Tower/2020, beneath the team folders the matrix shows."""
+
+    def setUp(self):
+        super().setUp()
+        sync = self.root.owner
+        self.tower = adapt_folder('Tower', self.flux, sync)
+        self.tower_2019 = adapt_folder('2019', self.tower, sync)
+        self.tower_2020 = adapt_folder('2020', self.tower, sync)
+
+    def others(self, out):
+        return out.split('Other folders checked')[1].split('\n\n')[0]
+
+    def test_folders_with_their_own_entries_are_checked(self):
+        export = MATCHING + entry('Soils\\2024', 'NEAD\\00000003', 'FullControl')
+        self.check(export)
+        FolderGrant.objects.filter(folder=self.soils_2024, user=self.carol).update(can_write=False)
+        out, error = self.check(export, apply=False)
+        self.assertIsNotNone(error)
+        self.assertIn('ADAPT/Soils/2024', self.others(out))
+        self.assertIn('carol3 on ADAPT/Soils/2024: ADMA read, snr18 write', out.split('Mismatches')[1])
+        # The team matrix alone would pass: carol reads Soils on both sides.
+        self.assertEqual(self.matrix(out)['carol3']['Soils'], 'R/R')
+
+    def test_a_folder_that_blocks_inheritance_below_a_team_folder_is_checked(self):
+        out, error = self.check(MATCHING + entry('Soils\\2024', 'NEAD\\00000002', READ, protected=True))
+        self.assertIsNotNone(error)
+        self.assertIn('carol3 on ADAPT/Soils/2024: ADMA read, snr18 nothing', out.split('Mismatches')[1])
+
+    def test_no_propagate_over_grant_below_the_direct_children_is_an_accepted_difference(self):
+        out, error = self.check(MATCHING + entry('Flux Measurements', 'NEAD\\00000002', 'FullControl',
+                                                 protected=True, applies_to=NO_PROPAGATE))
+        self.assertIsNone(error)
+        deeper = self.others(out)
+        for path in ('ADAPT/Flux Measurements/Tower', 'ADAPT/Flux Measurements/Tower/2019',
+                     'ADAPT/Flux Measurements/Tower/2020'):
+            self.assertIn(path, deeper)
+        accepted = out.split('Accepted differences')[1]
+        self.assertIn('bob2 on ADAPT/Flux Measurements/Tower/2019: ADMA write, snr18 read', accepted)
+        self.assertIn('NoPropagateInherit', accepted)
+        self.assertIn('ticket 9', accepted)
+        self.assertNotIn('bob2 on ADAPT/Flux Measurements/Tower:', accepted)
+        self.assertIn('0 mismatches', out)
+
+    def test_a_hand_made_grant_where_a_limited_entry_stops_is_a_mismatch(self):
+        export = MATCHING + entry('Flux Measurements', 'NEAD\\00000002', 'FullControl',
+                                  protected=True, applies_to=NO_PROPAGATE)
+        self.check(export)
+        FolderGrant.objects.create(folder=self.tower_2020, user=self.dave, can_write=True)
+        out, error = self.check(export, apply=False)
+        self.assertIsNotNone(error)
+        self.assertIn('dave4 on ADAPT/Flux Measurements/Tower/2020: ADMA write, snr18 nothing',
+                      out.split('Mismatches')[1])
+
+    def test_an_inherit_only_over_grant_is_a_mismatch(self):
+        out, error = self.check(MATCHING + entry('Soils', 'NEAD\\00000004', 'FullControl',
+                                                 applies_to='ContainerInherit, ObjectInherit/InheritOnly'))
+        self.assertIsNotNone(error)
+        self.assertIn('dave4 on Soils: ADMA write, snr18 nothing', out.split('Mismatches')[1])
+        self.assertEqual(self.matrix(out)['dave4']['Soils'], 'W/-!')
+

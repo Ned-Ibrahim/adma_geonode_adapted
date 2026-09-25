@@ -30,15 +30,26 @@ written in one transaction. A rerun with the same export changes nothing.
 
 check prints, for every roster user and every team folder (the folders
 directly under ADAPT), what ADMA allows next to what snr18 allows, and fails
-if they differ. The ADMA side comes from filemanager.permissions; read there
-means the folder's files are visible (can_list_files), so a folder that is
-only open to navigate towards a grant further down does not count. The snr18
+if they differ. It compares the same way, without a matrix, on the other
+folders where the two can part: the root, folders the export gives entries
+of their own or that block inheritance, and the two levels beneath an entry
+that does not reach its whole subtree (where its reach on snr18 ends).
+
+The ADMA side comes from filemanager.permissions; read there means the
+folder's files are visible (can_list_files), so a folder that is only open
+to navigate towards a grant further down does not count. The snr18
 side is worked out from the export and the roster alone: Windows inheritance
 over the exported entries, with group membership taken from the roster.
 
 Team folders the export names but the catalogue lacks fail the check, unless
 --allow-missing is passed; then they are only listed. Folder names compare
 without case, as on the share.
+
+An ADMA grant imported from a NoPropagateInherit entry reaches deeper than
+the entry does on snr18. Whether it should is an open policy decision
+(ticket 9), so where that alone explains the difference it is listed as an
+accepted difference, not a failure. Other over-grants, InheritOnly ones
+included, fail.
 
 BUILTIN\\Users holds every domain account on snr18, so check counts it as
 every roster user. import cannot map it, so access that snr18 gives only
@@ -56,6 +67,7 @@ they are listed per folder.
 """
 import re
 from collections import defaultdict
+from dataclasses import replace
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
@@ -126,9 +138,13 @@ class Catalogue:
         if self.root is None:
             raise CommandError('No ADAPT root folder. Run setup_adapt and sync_adapt first.')
         self.children = {}               # (parent id, name without case) -> folder id
+        self.below = defaultdict(list)   # parent id -> [(name, folder id)]
+        self.names = {}                  # folder id -> name
         rows = Folder.objects.filter(third_party_source='adapt', deletion_in_progress=False)
         for pk, parent_id, name in rows.values_list('id', 'parent_id', 'name'):
             self.children[(parent_id, name.lower())] = pk
+            self.below[parent_id].append((name, pk))
+            self.names[pk] = name
 
     def find(self, path):
         """Folder id for an export path, or None. Names compare without case, as on the share."""
@@ -141,6 +157,25 @@ class Catalogue:
 
     def display(self, path):
         return '/'.join(('ADAPT',) + tuple(path))
+
+    def descendants(self, folder_id, path, levels):
+        """(path, folder id) of the folders up to `levels` beneath a folder, named as the catalogue spells them."""
+        found = []
+        for name, pk in self.below.get(folder_id, ()):
+            found.append((path + (name,), pk))
+            if levels > 1:
+                found += self.descendants(pk, path + (name,), levels - 1)
+        return found
+
+    def spelled(self, path):
+        """An export path in the catalogue's spelling, or None if it is not in the catalogue."""
+        pk, names = self.root.pk, []
+        for part in path:
+            pk = self.children.get((pk, part.lower()))
+            if pk is None:
+                return None
+            names.append(self.names[pk])
+        return tuple(names)
 
 
 class Command(BaseCommand):
@@ -376,41 +411,36 @@ class Command(BaseCommand):
             problems = '; '.join(f'line {line}: {message}' for line, message, _, _ in failures)
             raise CommandError(f'The roster has rows that cannot be read: {problems}')
         acl = Acl(entries)
+        # snr18 as ADMA models it: a NoPropagateInherit entry reaching the whole
+        # subtree, as its imported grant does. Whether that is right is an open
+        # policy decision (ticket 9), so differences it explains are accepted.
+        spread = {e: replace(e, applies_to=e.applies_to.replace('NoPropagateInherit', 'None'))
+                  for e in entries if e.no_propagate}
+        widened = Acl(spread.get(e, e) for e in entries)
+        spread = set(spread.values())
         catalogue = Catalogue()
         principals = Principals()
         folders = list(catalogue.root.subfolders.filter(deletion_in_progress=False).order_by('name'))
+        others = self._other_folders(entries, catalogue, {f.pk for f in folders})
+        objects = Folder.objects.in_bulk([pk for pk, _ in others.values()])
         accounts = {p.nuid: p.user for p in UserProfile.objects.filter(nuid__in=[r.nuid for r in rows])
                     .select_related('user')}
 
-        cells, mismatches, accepted, notes = {}, [], [], []
+        cells, found = {}, defaultdict(list)
         for row in rows:
             user = accounts.get(row.nuid)
+            name = user.username if user else row.username
             own = {f'{DOMAIN}\\{row.nuid}'} | {f'{DOMAIN}\\{g}' for g in row.groups}
             for folder in folders:
-                path = (folder.name,)
-                strict = acl.access(path, own)
-                snr18 = acl.access(path, own | EVERY_DOMAIN_USER)
-                adma = ((permissions.can_list_files(user, folder), permissions.can_write(user, folder))
-                        if user else (False, False))
-                name = user.username if user else row.username
-                where = f'{name} on {folder.name}: ADMA {mode(*adma)}, snr18 {mode(*snr18)}'
-                builtin = sorted({e.identity for e in acl.matching(path, EVERY_DOMAIN_USER)})
-                if adma == snr18:
-                    mark = ''
-                    if strict != snr18:
-                        mark = '+'
-                        notes.append(f'  {where}. On snr18 only through {", ".join(builtin)}; '
-                                     'ADMA gives it through other grants.')
-                elif adma == strict:
-                    mark = '*'
-                    accepted.append(f'  {where} through {", ".join(builtin)}, which ADMA cannot import.')
-                else:
-                    mark = '!'
-                    through = sorted({e.identity for e in acl.matching(path, own | EVERY_DOMAIN_USER)})
-                    mismatches.append(f'  {where}. snr18 through: {", ".join(through) or "nothing"}.'
-                                      + ('' if user else ' No ADMA account has this NUID.'))
+                kind, adma, snr18 = self._compare(acl, widened, spread, found, user, name, own,
+                                                  folder, (folder.name,), folder.name)
+                mark = {'match': '', 'builtin_only': '+', 'builtin': '*', 'reach': '*', 'mismatch': '!'}[kind]
                 cells[(row.nuid, folder.pk)] = f'{self._cell(*adma)}/{self._cell(*snr18)}{mark}'
+            for path in sorted(others, key=lambda p: [part.lower() for part in p]):
+                folder = objects[others[path][0]]
+                self._compare(acl, widened, spread, found, user, name, own, folder, path, catalogue.display(path))
 
+        mismatches, accepted, notes, reach = found['mismatch'], found['builtin'], found['builtin_only'], found['reach']
         self._matrix(rows, accounts, folders, cells)
         known = {f.name.lower() for f in folders}
         missing = sorted({e.path[0] for e in entries if e.path and e.path[0].lower() not in known}, key=str.lower)
@@ -418,24 +448,93 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(
                 f'Team folders in the export but not in the catalogue, so not checked: {", ".join(missing)}'))
             self.stdout.write('')
+        self._section(f'Other folders checked ({len(others)}), for every roster user: the root and folders with '
+                      'entries of their own or blocked inheritance, and the two levels beneath an entry that does '
+                      'not reach its whole subtree. Differences are listed below.',
+                      [f'  {catalogue.display(path)} ({why})' for path, (_, why) in
+                       sorted(others.items(), key=lambda item: [part.lower() for part in item[0]])], plain=True)
         self._section(f'Mismatches ({len(mismatches)}):', mismatches, plain=True)
         unmappable = self._unmappable(acl, folders, principals)
-        if accepted or notes or unmappable:
+        if accepted or notes or reach or unmappable:
             self.stdout.write('Accepted differences and notes (not failures):')
             self.stdout.write('')
             self._section('* ADMA differs from snr18 only by access through a built-in group:', accepted, plain=True)
+            self._section('* ADMA gives more than snr18 only because a NoPropagateInherit entry, which on snr18 '
+                          'stops below the direct children of its folder, was imported as a grant that covers the '
+                          'whole subtree. Whether it should is an open policy decision (ticket 9):',
+                          reach, plain=True)
             self._section('+ Same access, but on snr18 it comes only through a built-in group:', notes, plain=True)
             self._section('Identities with access that ADMA cannot map. Neither side counts them, '
                           'as the roster does not name their members:', unmappable, plain=True)
-        self.stdout.write(f'{plural(len(rows), "user")}, {plural(len(folders), "folder")}: '
+        self.stdout.write(f'{plural(len(rows), "user")}, {plural(len(folders), "team folder")}, '
+                          f'{plural(len(others), "other folder")}: '
                           f'{plural(len(mismatches), "mismatch", "mismatches")}, '
-                          f'{len(accepted)} accepted, {len(notes)} through a built-in group only.')
+                          f'{len(accepted) + len(reach)} accepted, {len(notes)} through a built-in group only.')
         if mismatches:
             raise CommandError(f'ADMA differs from snr18 in {plural(len(mismatches), "place")}; see Mismatches above.')
         if missing and not allow_missing:
             raise CommandError(f'{plural(len(missing), "team folder")} in the export '
                                f'{"is" if len(missing) == 1 else "are"} not in the catalogue: {", ".join(missing)}. '
                                'Run sync_adapt, or pass --allow-missing to check the rest.')
+
+    @staticmethod
+    def _compare(acl, widened, spread, found, user, name, own, folder, path, shown):
+        """Compare what ADMA and snr18 give one roster user on one folder.
+
+        `own` is the user's export identities, `widened` the export with the
+        `spread` NoPropagateInherit entries reaching the whole subtree. A
+        difference is filed in `found` under its kind. Returns (kind, adma, snr18).
+        """
+        everyone = own | EVERY_DOMAIN_USER
+        strict = acl.access(path, own)
+        snr18 = acl.access(path, everyone)
+        adma = ((permissions.can_list_files(user, folder), permissions.can_write(user, folder))
+                if user else (False, False))
+        where = f'{name} on {shown}: ADMA {mode(*adma)}, snr18 {mode(*snr18)}'
+        builtin = sorted({e.identity for e in acl.matching(path, EVERY_DOMAIN_USER)})
+        if adma == snr18:
+            if strict == snr18:
+                return 'match', adma, snr18
+            found['builtin_only'].append(f'  {where}. On snr18 only through {", ".join(builtin)}; '
+                                         'ADMA gives it through other grants.')
+            return 'builtin_only', adma, snr18
+        if adma == strict:
+            found['builtin'].append(f'  {where} through {", ".join(builtin)}, which ADMA cannot import.')
+            return 'builtin', adma, snr18
+        if adma in (widened.access(path, everyone), widened.access(path, own)):
+            limited = sorted({f'{e.identity} {e.rights_text} on {e.display_path}'
+                              for e in widened.matching(path, everyone) if e in spread})
+            found['reach'].append(f'  {where}. The ADMA grant comes from {"; ".join(limited)} (NoPropagateInherit).')
+            return 'reach', adma, snr18
+        through = sorted({e.identity for e in acl.matching(path, everyone)})
+        found['mismatch'].append(f'  {where}. snr18 through: {", ".join(through) or "nothing"}.'
+                                 + ('' if user else ' No ADMA account has this NUID.'))
+        return 'mismatch', adma, snr18
+
+    @staticmethod
+    def _other_folders(entries, catalogue, team_ids):
+        """{catalogue path: (folder id, why)} for the folders check compares besides the team folders."""
+        found = {}
+
+        def add(path, pk, why):
+            if pk in team_ids:
+                return
+            if path in found:
+                if why not in found[path][1]:
+                    found[path] = (pk, f'{found[path][1]}; {why}')
+            else:
+                found[path] = (pk, why)
+
+        for e in entries:
+            path = catalogue.spelled(e.path)
+            if path is None:
+                continue
+            pk = catalogue.find(path)
+            add(path, pk, 'blocks inheritance' if e.protected else 'entries of its own')
+            if not e.whole_subtree:
+                for below, child in catalogue.descendants(pk, path, 2):
+                    add(below, child, f'beneath a limited entry on {path_text(path)}')
+        return found
 
     @staticmethod
     def _cell(read, write):
