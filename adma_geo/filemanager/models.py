@@ -1,6 +1,7 @@
 import os
 import uuid
 from pathlib import Path
+from django.core.validators import RegexValidator
 from django.db import models
 # from django.contrib.gis.db import models as gis_models  # Disabled for now
 # from django.contrib.gis.geos import Point
@@ -1091,3 +1092,21 @@ class FolderGrant(models.Model):
     def __str__(self):
         who = self.user.username if self.user_id else f'group {self.group.name}'
         return f"{who} {'read/write' if self.can_write else 'read'} {self.folder.get_full_path()}"
+
+
+class UserProfile(models.Model):
+    """What ADMA keeps about a person beyond Django's own User fields.
+
+    The NUID is the University of Nebraska ID. The ADAPT roster and the snr18
+    permission export name people by it (NEAD\\<NUID>), so it is how both reach
+    an ADMA account. Accounts made by hand have no NUID.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    nuid = models.CharField(
+        'NUID', max_length=8, unique=True, null=True, blank=True,
+        validators=[RegexValidator(r'^\d{8}$', 'A NUID is 8 digits, leading zeros included.')],
+        help_text='University of Nebraska ID, 8 digits. Set by adapt_users load.',
+    )
+
+    def __str__(self):
+        return f'{self.user.username} ({self.nuid or "no NUID"})'

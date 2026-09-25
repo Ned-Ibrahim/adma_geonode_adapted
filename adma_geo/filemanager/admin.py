@@ -1,6 +1,10 @@
 from django import forms
 from django.contrib import admin
-from .models import Folder, File, Map, MapLayer, Tool, FolderGrant
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin
+from .models import Folder, File, Map, MapLayer, Tool, FolderGrant, UserProfile
+
+User = get_user_model()
 
 
 @admin.register(Folder)
@@ -121,3 +125,26 @@ class FolderGrantAdmin(admin.ModelAdmin):
         if not change:
             obj.granted_by = request.user
         super().save_model(request, obj, form, change)
+
+
+class UserProfileInline(admin.StackedInline):
+    model = UserProfile
+    can_delete = False
+    verbose_name_plural = 'Profile'
+
+
+admin.site.unregister(User)
+
+
+@admin.register(User)
+class ProfileUserAdmin(UserAdmin):
+    """Django's user admin, plus the profile (NUID) on the change page and in search."""
+    inlines = [UserProfileInline]
+    list_display = UserAdmin.list_display + ('nuid',)
+    list_select_related = ['profile']
+    search_fields = UserAdmin.search_fields + ('profile__nuid',)
+
+    @admin.display(description='NUID', ordering='profile__nuid')
+    def nuid(self, obj):
+        profile = getattr(obj, 'profile', None)
+        return profile.nuid if profile else None
