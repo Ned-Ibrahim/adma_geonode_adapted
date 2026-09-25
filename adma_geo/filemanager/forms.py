@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import PasswordChangeForm
-from .models import Folder, File
+from .models import Folder
 
 User = get_user_model()
 

@@ -197,7 +197,8 @@ class Command(BaseCommand):
         warnings += self._protected_warnings(entries, catalogue, wanted)
 
         existing = {}
-        for grant in FolderGrant.objects.filter(folder__third_party_source='adapt').select_related('folder', 'user', 'group'):
+        adapt_grants = FolderGrant.objects.filter(folder__third_party_source='adapt')
+        for grant in adapt_grants.select_related('folder', 'user', 'group'):
             kind, pk = ('user', grant.user_id) if grant.user_id else ('group', grant.group_id)
             existing[(grant.folder_id, kind, pk)] = grant
         add = [key for key in wanted if key not in existing]
