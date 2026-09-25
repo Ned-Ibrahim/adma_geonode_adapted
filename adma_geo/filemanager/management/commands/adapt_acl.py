@@ -1,5 +1,5 @@
 """
-Mirror the snr18 permissions of the ADAPT share into ADMA.
+Mirror the snr18 permissions of the ADAPT share into ADMA, and check the result.
 
 import turns the snr18 ACL export (see filemanager.ntfs_acl for its format)
 into FolderGrant rows. It replaces every ADAPT grant, hand-made ones included,
@@ -22,8 +22,26 @@ so the export is the only source of ADAPT access afterwards:
 Without --apply it only prints what would change. With --apply every change is
 written in one transaction. A rerun with the same export changes nothing.
 
+check prints, for every roster user and every team folder (the folders
+directly under ADAPT), what ADMA allows next to what snr18 allows, and fails
+if they differ. The ADMA side comes from filemanager.permissions; read there
+means the folder's files are visible (can_list_files), so a folder that is
+only open to navigate towards a grant further down does not count. The snr18
+side is worked out from the export and the roster alone: Windows inheritance
+over the exported entries, with group membership taken from the roster.
+
+BUILTIN\\Users holds every domain account on snr18, so check counts it as
+every roster user. import cannot map it, so access that snr18 gives only
+through BUILTIN\\Users is not a failure: where ADMA gives the same access
+through other grants the cell is marked +, where ADMA does not the cell is
+marked * as an accepted difference. Both are listed under the matrix. Other
+identities ADMA cannot map (BUILTIN\\Administrators, snr-computersupport and
+so on) have members the roster does not name; neither side counts them, and
+they are listed per folder.
+
     python manage.py adapt_acl import acl.csv
     python manage.py adapt_acl import acl.csv --apply
+    python manage.py adapt_acl check acl.csv --roster roster.csv
 """
 import re
 from collections import defaultdict
@@ -33,8 +51,16 @@ from django.contrib.auth.models import Group
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from filemanager import permissions
+from filemanager.management.commands.adapt_users import read_roster
 from filemanager.models import Folder, FolderGrant, UserProfile
-from filemanager.ntfs_acl import ExportError, path_text, read_export
+from filemanager.ntfs_acl import (
+    EVERY_DOMAIN_USER,
+    Acl,
+    ExportError,
+    path_text,
+    read_export,
+)
 
 User = get_user_model()
 
@@ -106,17 +132,23 @@ class Catalogue:
 
 
 class Command(BaseCommand):
-    help = 'Import ADAPT folder grants from the snr18 ACL export'
+    help = 'Import ADAPT folder grants from the snr18 ACL export, or check them against it'
 
     def add_arguments(self, parser):
         sub = parser.add_subparsers(dest='action', required=True)
         imp = sub.add_parser('import', help='Replace every ADAPT grant with the grants in the export')
         imp.add_argument('export', help='snr18 ACL export (CSV)')
         imp.add_argument('--apply', action='store_true', help='Write the changes; without it nothing is saved')
+        check = sub.add_parser('check', help='Compare ADMA access with snr18 for every roster user')
+        check.add_argument('export', help='snr18 ACL export (CSV)')
+        check.add_argument('--roster', required=True, help='Roster CSV, as for adapt_users load')
 
     def handle(self, *args, **options):
         entries = self._read(options['export'])
-        self._import(entries, options['apply'])
+        if options['action'] == 'import':
+            self._import(entries, options['apply'])
+        else:
+            self._check(entries, options['roster'])
 
     def _read(self, path):
         try:
@@ -128,6 +160,8 @@ class Command(BaseCommand):
             where = '; '.join(f'line {e.line}: {e.identity} on {e.display_path}' for e in denies)
             raise CommandError(f'The export has Deny entries, which ADMA grants cannot express: {where}')
         return entries
+
+    # import
 
     def _import(self, entries, apply):
         catalogue = Catalogue()
@@ -309,3 +343,102 @@ class Command(BaseCommand):
     @staticmethod
     def _unknown_lines(unknown):
         return [f'  {branch}' for branch in Command._branches(unknown)]
+
+    # check
+
+    def _check(self, entries, roster_path):
+        rows, failures, _ = read_roster(roster_path)
+        if failures:
+            problems = '; '.join(f'line {line}: {message}' for line, message, _, _ in failures)
+            raise CommandError(f'The roster has rows that cannot be read: {problems}')
+        acl = Acl(entries)
+        catalogue = Catalogue()
+        principals = Principals()
+        folders = list(catalogue.root.subfolders.filter(deletion_in_progress=False).order_by('name'))
+        accounts = {p.nuid: p.user for p in UserProfile.objects.filter(nuid__in=[r.nuid for r in rows])
+                    .select_related('user')}
+
+        cells, mismatches, accepted, notes = {}, [], [], []
+        for row in rows:
+            user = accounts.get(row.nuid)
+            own = {f'{DOMAIN}\\{row.nuid}'} | {f'{DOMAIN}\\{g}' for g in row.groups}
+            for folder in folders:
+                path = (folder.name,)
+                strict = acl.access(path, own)
+                snr18 = acl.access(path, own | EVERY_DOMAIN_USER)
+                adma = ((permissions.can_list_files(user, folder), permissions.can_write(user, folder))
+                        if user else (False, False))
+                name = user.username if user else row.username
+                where = f'{name} on {folder.name}: ADMA {mode(*adma)}, snr18 {mode(*snr18)}'
+                builtin = sorted({e.identity for e in acl.matching(path, EVERY_DOMAIN_USER)})
+                if adma == snr18:
+                    mark = ''
+                    if strict != snr18:
+                        mark = '+'
+                        notes.append(f'  {where}. On snr18 only through {", ".join(builtin)}; '
+                                     'ADMA gives it through other grants.')
+                elif adma == strict:
+                    mark = '*'
+                    accepted.append(f'  {where} through {", ".join(builtin)}, which ADMA cannot import.')
+                else:
+                    mark = '!'
+                    through = sorted({e.identity for e in acl.matching(path, own | EVERY_DOMAIN_USER)})
+                    mismatches.append(f'  {where}. snr18 through: {", ".join(through) or "nothing"}.'
+                                      + ('' if user else ' No ADMA account has this NUID.'))
+                cells[(row.nuid, folder.pk)] = f'{self._cell(*adma)}/{self._cell(*snr18)}{mark}'
+
+        self._matrix(rows, accounts, folders, cells)
+        missing = sorted({e.path[0] for e in entries if e.path} - {f.name for f in folders})
+        if missing:
+            self.stdout.write(self.style.WARNING(
+                f'Team folders in the export but not in the catalogue, so not checked: {", ".join(missing)}'))
+            self.stdout.write('')
+        self._section(f'Mismatches ({len(mismatches)}):', mismatches, plain=True)
+        unmappable = self._unmappable(acl, folders, principals)
+        if accepted or notes or unmappable:
+            self.stdout.write('Accepted differences and notes (not failures):')
+            self.stdout.write('')
+            self._section('* ADMA differs from snr18 only by access through a built-in group:', accepted, plain=True)
+            self._section('+ Same access, but on snr18 it comes only through a built-in group:', notes, plain=True)
+            self._section('Identities with access that ADMA cannot map. Neither side counts them, '
+                          'as the roster does not name their members:', unmappable, plain=True)
+        self.stdout.write(f'{plural(len(rows), "user")}, {plural(len(folders), "folder")}: '
+                          f'{plural(len(mismatches), "mismatch", "mismatches")}, '
+                          f'{len(accepted)} accepted, {len(notes)} through a built-in group only.')
+        if mismatches:
+            raise CommandError(f'ADMA differs from snr18 in {plural(len(mismatches), "place")}; see Mismatches above.')
+
+    @staticmethod
+    def _cell(read, write):
+        return 'W' if write else 'R' if read else '-'
+
+    def _matrix(self, rows, accounts, folders, cells):
+        self.stdout.write('Each cell is ADMA/snr18: W read and write, R read only, - nothing.')
+        self.stdout.write('! mismatch, * accepted difference, + same access, on snr18 only through a built-in group.')
+        for i, folder in enumerate(folders, 1):
+            self.stdout.write(f'  {i:>2}  {folder.name}')
+        self.stdout.write('')
+        names = {row.nuid: accounts[row.nuid].username if row.nuid in accounts else row.username for row in rows}
+        width = max([len('user')] + [len(n) for n in names.values()])
+        self.stdout.write(f'{"user":<{width}}  ' + ''.join(f'{i:<6}' for i in range(1, len(folders) + 1)).rstrip())
+        for row in sorted(rows, key=lambda r: names[r.nuid]):
+            self.stdout.write(f'{names[row.nuid]:<{width}}  '
+                              + ''.join(f'{cells[(row.nuid, f.pk)]:<6}' for f in folders).rstrip())
+        self.stdout.write('')
+
+    @staticmethod
+    def _unmappable(acl, folders, principals):
+        lines = []
+        for folder in folders:
+            found = defaultdict(set)
+            for e in acl.effective((folder.name,)):
+                if e.key() in EVERY_DOMAIN_USER:
+                    continue
+                principal, _ = principals.resolve(e.identity)
+                if principal is None and (e.reads or e.writes):
+                    found[e.identity].add(mode(e.reads, e.writes))
+            if found:
+                who = ', '.join(f'{identity} ({"write" if "write" in modes else "read"})'
+                                for identity, modes in sorted(found.items()))
+                lines.append(f'  {folder.name}: {who}')
+        return lines

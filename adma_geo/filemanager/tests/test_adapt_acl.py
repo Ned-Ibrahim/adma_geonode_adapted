@@ -1,4 +1,4 @@
-"""adapt_acl import turns the snr18 permission export into ADAPT folder grants.
+"""adapt_acl turns the snr18 permission export into ADAPT folder grants, and checks them against snr18.
 
 Every name, NUID and folder here is made up. The real export and roster are
 personal data and never enter the repository.
@@ -11,8 +11,9 @@ from pathlib import Path
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
+from filemanager import ntfs_acl
 from filemanager.models import Folder, FolderGrant, UserProfile
 
 User = get_user_model()
@@ -235,3 +236,166 @@ class Import(AclTree):
         Folder.objects.filter(pk=self.root.pk).delete()
         _, error = self.import_export()
         self.assertIn('No ADAPT root folder', str(error))
+
+
+def acl(*rows):
+    return ntfs_acl.Acl(ntfs_acl.Entry(
+        line=n, path=ntfs_acl.split_path(path), protected=protected, identity=identity,
+        rights_text=rights, allow=True, applies_to=applies_to,
+    ) for n, (path, identity, rights, protected, applies_to) in enumerate(rows, 2))
+
+
+class WindowsInheritance(SimpleTestCase):
+    """What snr18 allows on a folder, from the export alone."""
+
+    def test_an_entry_reaches_the_folder_and_everything_beneath(self):
+        tree = acl(('A', 'NEAD\\u1', 'FullControl', False, ALL))
+        self.assertEqual(tree.access(('A',), {'NEAD\\u1'}), (True, True))
+        self.assertEqual(tree.access(('A', 'B', 'C'), {'NEAD\\u1'}), (True, True))
+        self.assertEqual(tree.access(('Other',), {'NEAD\\u1'}), (False, False))
+
+    def test_a_protected_folder_cuts_inheritance_for_itself_and_below(self):
+        tree = acl(('(root)', 'NEAD\\u1', READ, True, ALL),
+                   ('A', 'NEAD\\u2', READ, True, ALL))
+        self.assertEqual(tree.access(('A',), {'NEAD\\u1'}), (False, False))
+        self.assertEqual(tree.access(('A', 'B'), {'NEAD\\u1'}), (False, False))
+        self.assertEqual(tree.access(('A', 'B'), {'NEAD\\u2'}), (True, False))
+        self.assertEqual(tree.access(('Other',), {'NEAD\\u1'}), (True, False))
+
+    def test_no_propagate_inherit_reaches_the_folder_and_its_direct_children_only(self):
+        tree = acl(('A', 'NEAD\\u1', 'FullControl', False, 'ContainerInherit, ObjectInherit/NoPropagateInherit'))
+        self.assertEqual(tree.access(('A',), {'NEAD\\u1'}), (True, True))
+        self.assertEqual(tree.access(('A', 'B'), {'NEAD\\u1'}), (True, True))
+        self.assertEqual(tree.access(('A', 'B', 'C'), {'NEAD\\u1'}), (False, False))
+
+    def test_inherit_only_skips_the_folder_itself(self):
+        tree = acl(('A', 'NEAD\\u1', 'FullControl', False, 'ContainerInherit, ObjectInherit/InheritOnly'))
+        self.assertEqual(tree.access(('A',), {'NEAD\\u1'}), (False, False))
+        self.assertEqual(tree.access(('A', 'B'), {'NEAD\\u1'}), (True, True))
+
+    def test_without_container_inherit_subfolders_get_nothing(self):
+        tree = acl(('A', 'NEAD\\u1', READ, False, 'ObjectInherit/None'))
+        self.assertEqual(tree.access(('A',), {'NEAD\\u1'}), (True, False))
+        self.assertEqual(tree.access(('A', 'B'), {'NEAD\\u1'}), (False, False))
+
+    def test_identities_compare_without_case(self):
+        tree = acl(('A', 'NEAD\\SNR_Team', READ, False, ALL))
+        self.assertEqual(tree.access(('A',), {'nead\\snr_team'}), (True, False))
+
+
+ROSTER = (
+    'nuid,username,full_name,groups\n'
+    '00000001,alice.a,Alice Anders,snr_adapt_all;snr_adapt_admin\n'
+    '00000002,bob2,Bob Bell,snr_adapt_all\n'
+    '00000003,carol3,Carol Cruz,\n'
+    '00000004,dave4,Dave Dunn,\n'
+)
+
+ROOT_ENTRIES = (
+    entry('(root)', 'BUILTIN\\Administrators', 'FullControl', protected=True)
+    + entry('(root)', 'NEAD\\snr_adapt_all', READ, protected=True)
+    + entry('(root)', 'NEAD\\snr_adapt_admin', 'FullControl', protected=True)
+    + entry('(root)', 'NEAD\\00000003', READ, protected=True)
+    + entry('Grazing Systems', 'NEAD\\00000002', 'FullControl')
+    + entry('Flux Measurements', 'NEAD\\snr_adapt_all', READ, protected=True)
+    + entry('Flux Measurements', 'NEAD\\snr_adapt_admin', 'FullControl', protected=True)
+)
+MATCHING = HEADER + ROOT_ENTRIES + entry('Flux Measurements', 'NEAD\\00000003', READ, protected=True)
+
+
+class Check(AclTree):
+    """Folders in the matrix: Flux Measurements, Grazing Systems, Soils (by name)."""
+
+    FOLDERS = ('Flux Measurements', 'Grazing Systems', 'Soils')
+
+    def check(self, export=MATCHING, roster=ROSTER, apply=True):
+        path = self.write('acl.csv', export)
+        if apply:
+            _, error = self.run_acl('import', path, '--apply')
+            self.assertIsNone(error)
+        return self.run_acl('check', path, '--roster', self.write('roster.csv', roster))
+
+    def matrix(self, out):
+        """{username: {folder: cell}} from the printed matrix."""
+        lines = out.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.split()[:1] == ['user'])
+        rows = {}
+        for line in lines[start + 1:]:
+            if not line.strip():
+                break
+            name, *cells = line.split()
+            rows[name] = dict(zip(self.FOLDERS, cells))
+        return rows
+
+    def test_a_team_member_writes_their_team_folder_and_reads_the_others(self):
+        out, error = self.check()
+        self.assertIsNone(error)
+        bob = self.matrix(out)['bob2']
+        self.assertEqual(bob, {'Flux Measurements': 'R/R', 'Grazing Systems': 'W/W', 'Soils': 'R/R'})
+
+    def test_an_outsider_named_at_the_root_only_reads(self):
+        out, _ = self.check()
+        self.assertEqual(set(self.matrix(out)['carol3'].values()), {'R/R'})
+
+    def test_admins_write_everywhere(self):
+        out, _ = self.check()
+        self.assertEqual(set(self.matrix(out)['alice.a'].values()), {'W/W'})
+
+    def test_a_user_with_no_grant_sees_nothing(self):
+        out, _ = self.check()
+        self.assertEqual(set(self.matrix(out)['dave4'].values()), {'-/-'})
+
+    def test_matching_access_passes_with_no_mismatches(self):
+        out, error = self.check()
+        self.assertIsNone(error)
+        self.assertIn('4 users, 3 folders: 0 mismatches', out)
+
+    def test_a_protected_folder_cuts_inheritance_and_the_adma_grant_above_it_is_a_mismatch(self):
+        out, error = self.check(HEADER + ROOT_ENTRIES)
+        self.assertIsNotNone(error)
+        self.assertEqual(self.matrix(out)['carol3']['Flux Measurements'], 'R/-!')
+        self.assertIn('carol3 on Flux Measurements: ADMA read, snr18 nothing', out.split('Mismatches')[1])
+
+    def test_a_grant_changed_by_hand_is_caught(self):
+        self.check()
+        FolderGrant.objects.filter(folder=self.grazing, user=self.bob).update(can_write=False)
+        out, error = self.check(apply=False)
+        self.assertIsNotNone(error)
+        self.assertIn('bob2 on Grazing Systems: ADMA read, snr18 write', out)
+
+    def test_snr18_group_membership_comes_from_the_roster(self):
+        self.check()
+        roster = ROSTER.replace('00000002,bob2,Bob Bell,snr_adapt_all', '00000002,bob2,Bob Bell,')
+        out, error = self.check(roster=roster, apply=False)
+        self.assertIsNotNone(error)
+        self.assertEqual(self.matrix(out)['bob2']['Soils'], 'R/-!')
+
+    def test_a_roster_person_without_an_account_is_a_mismatch(self):
+        out, error = self.check(roster=ROSTER + '00000009,erin9,Erin Eck,snr_adapt_all\n')
+        self.assertIsNotNone(error)
+        self.assertEqual(set(self.matrix(out)['erin9'].values()), {'-/R!'})
+        self.assertIn('No ADMA account has this NUID', out)
+
+    def test_read_through_builtin_users_counts_as_every_domain_account(self):
+        export = HEADER + ROOT_ENTRIES + entry('Flux Measurements', 'BUILTIN\\Users', READ, protected=True)
+        out, error = self.check(export)
+        self.assertIsNone(error)
+        cells = self.matrix(out)
+        # carol3 reads Flux in ADMA through her root grant; snr18 lets her in only as a domain user.
+        self.assertEqual(cells['carol3']['Flux Measurements'], 'R/R+')
+        # dave4 has no grant anywhere: ADMA cannot import BUILTIN\Users, so this is accepted.
+        self.assertEqual(cells['dave4']['Flux Measurements'], '-/R*')
+        accepted = out.split('Accepted differences')[1]
+        self.assertIn('dave4 on Flux Measurements', accepted)
+        self.assertIn('carol3 on Flux Measurements', accepted)
+        self.assertIn('0 mismatches', out)
+
+    def test_identities_adma_cannot_map_are_listed_per_folder(self):
+        out, _ = self.check()
+        section = out.split('Identities with access that ADMA cannot map')[1]
+        self.assertIn('Soils: BUILTIN\\Administrators (write)', section)
+        self.assertNotIn('Flux Measurements: BUILTIN', section)
+
+    def test_team_folders_the_catalogue_lacks_are_named(self):
+        out, _ = self.check(MATCHING + entry('Range Science', 'NEAD\\00000002', 'FullControl'))
+        self.assertIn('not in the catalogue, so not checked: Range Science', out)
