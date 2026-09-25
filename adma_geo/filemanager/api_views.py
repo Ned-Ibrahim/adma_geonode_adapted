@@ -19,7 +19,8 @@ import io
 import os
 from django.utils.text import slugify
 
-from .models import File, Folder
+from .middleware import PASSWORD_CHANGE_MESSAGE
+from .models import File, Folder, must_change_password
 from . import permissions
 from .serializers import (
     FileUploadSerializer, FolderUploadSerializer, FileDownloadSerializer,
@@ -75,6 +76,9 @@ def create_token(request):
         password = serializer.validated_data['password']
         
         user = authenticate(username=username, password=password)
+        if user and must_change_password(user):
+            # The one-time password must not buy a token that outlives it.
+            return Response({'error': PASSWORD_CHANGE_MESSAGE}, status=status.HTTP_403_FORBIDDEN)
         if user:
             token, created = Token.objects.get_or_create(user=user)
             return Response({

@@ -11,6 +11,8 @@ from django.db.models.signals import post_save, post_delete, pre_delete
 from django.dispatch import receiver
 import logging
 
+from rest_framework.authtoken.models import Token
+
 from .models import MapLayer, File, Folder, Map
 
 logger = logging.getLogger(__name__)
@@ -226,3 +228,23 @@ def remove_folder_directory(sender, instance, **kwargs):
         logger.info("Removed empty media directory for folder '%s'", instance.name)
     except Exception as e:
         logger.error("Could not remove media directory for folder %s: %s", instance.pk, e)
+
+
+# ---------------------------------------------------------------------------
+# API tokens end with the password they were taken with
+#
+# Django signs sessions with the password hash, so a new password signs out
+# every other session. DRF tokens have no such link, so this handler gives
+# them one: whenever a saved user's password hash changes, by the change
+# password form, the admin, manage.py changepassword or a script calling
+# set_password, the user's tokens are deleted and must be taken again.
+# ---------------------------------------------------------------------------
+
+
+@receiver(pre_save, sender=settings.AUTH_USER_MODEL)
+def revoke_api_tokens_on_password_change(sender, instance, update_fields=None, **kwargs):
+    if not instance.pk or (update_fields is not None and 'password' not in update_fields):
+        return
+    old = sender.objects.filter(pk=instance.pk).values_list('password', flat=True).first()
+    if old is not None and old != instance.password:
+        Token.objects.filter(user_id=instance.pk).delete()

@@ -180,3 +180,55 @@ class AdminSetsTheFlag(TestCase):
         url = f'/admin/auth/user/{target.pk}/change/'
         page = self.client.get(url)
         self.assertContains(page, 'name="profile-0-must_change_password"')
+
+
+TOKEN_URL = '/api/v1/auth/token/'
+
+
+class ApiTokensAndPasswordChanges(TestCase):
+    """A DRF token must not outlive the password it was taken with."""
+
+    def test_the_one_time_password_does_not_buy_a_token(self):
+        flagged_user()
+        response = self.client.post(TOKEN_URL, {'username': 'pilot', 'password': OLD})
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('change your password', response.json()['error'])
+        self.assertFalse(Token.objects.exists())
+
+    def test_a_wrong_password_is_still_a_401_for_a_flagged_user(self):
+        flagged_user()
+        response = self.client.post(TOKEN_URL, {'username': 'pilot', 'password': 'wrong'})
+        self.assertEqual(response.status_code, 401)
+
+    def test_an_unflagged_user_gets_a_token(self):
+        User.objects.create_user('handmade', password=OLD)
+        response = self.client.post(TOKEN_URL, {'username': 'handmade', 'password': OLD})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Token.objects.filter(key=response.json()['token']).exists())
+
+    def test_a_token_taken_before_the_flag_stops_working_after_the_change(self):
+        user = flagged_user()
+        token = Token.objects.create(user=user)
+        self.client.force_login(user)
+        self.client.post(CHANGE_URL, {'old_password': OLD, 'new_password1': NEW, 'new_password2': NEW})
+        self.assertFalse(is_flagged(user))
+        self.client.logout()
+        response = self.client.get('/api/v1/files/', HTTP_AUTHORIZATION=f'Token {token.key}')
+        self.assertEqual(response.status_code, 401)
+
+    def test_any_password_change_revokes_tokens(self):
+        # The admin form, manage.py changepassword and scripts all end in set_password and save.
+        user = User.objects.create_user('handmade', password=OLD)
+        Token.objects.create(user=user)
+        user.set_password(NEW)
+        user.save()
+        self.assertFalse(Token.objects.filter(user=user).exists())
+
+    def test_saving_a_user_without_a_new_password_keeps_the_token(self):
+        user = User.objects.create_user('handmade', password=OLD)
+        token = Token.objects.create(user=user)
+        user.first_name = 'Hand'
+        user.save()
+        self.client.force_login(user)  # signing in saves last_login
+        self.client.logout()
+        self.assertTrue(Token.objects.filter(key=token.key).exists())

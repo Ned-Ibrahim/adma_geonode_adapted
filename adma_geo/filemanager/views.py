@@ -1911,6 +1911,7 @@ class ChangePasswordView(PasswordChangeView):
         return context
 
     def form_valid(self, form):
+        # Saving the new password also deletes the user's API tokens (signals.py).
         response = super().form_valid(form)
         UserProfile.objects.filter(user=self.request.user).update(must_change_password=False)
         messages.success(self.request, 'Your password has been changed.')
