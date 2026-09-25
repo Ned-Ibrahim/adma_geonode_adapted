@@ -303,6 +303,38 @@ class File(models.Model):
         # Proceed with normal deletion
         super().delete(*args, **kwargs)
 
+    def apply_extension_metadata(self, filename):
+        """Derive file_type, is_spatial and geoserver_workspace from an extension.
+
+        save() applies this for locally stored files. ADAPT references have no
+        FieldFile to read the name from, so adapt_storage applies it explicitly
+        using the name the file was given on the share.
+        """
+        file_ext = Path(filename).suffix.lower()
+
+        # Check if it's a spatial file (for display purposes)
+        if file_ext in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', []):
+            self.is_spatial = True
+            if not self.geoserver_workspace:
+                self.geoserver_workspace = getattr(settings, 'GEOSERVER_WORKSPACE', 'adma_geo')
+
+        # Determine file type for display and processing
+        if file_ext == '.csv':
+            self.file_type = 'csv'
+        elif file_ext in ['.xlsx', '.xls']:
+            self.file_type = 'spreadsheet'
+        elif (file_ext in getattr(settings, 'GIS_FILE_EXTENSIONS', [])
+              or file_ext in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', [])):
+            self.file_type = 'gis'
+        elif file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+            self.file_type = 'image'
+        elif file_ext in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml']:
+            self.file_type = 'text'
+        elif file_ext in ['.pdf', '.doc', '.docx', '.ppt', '.pptx']:
+            self.file_type = 'document'
+        else:
+            self.file_type = 'other'
+
     def save(self, *args, **kwargs):
         if self.file:
             # Set file size
@@ -313,30 +345,7 @@ class File(models.Model):
             if not self.name:
                 self.name = Path(self.file.name).stem
             
-            # Determine file type based on extension
-            file_ext = Path(self.file.name).suffix.lower()
-            
-            # Check if it's a spatial file (for display purposes)
-            if file_ext in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', []):
-                self.is_spatial = True
-                if not self.geoserver_workspace:
-                    self.geoserver_workspace = getattr(settings, 'GEOSERVER_WORKSPACE', 'adma_geo')
-            
-            # Determine file type for display and processing
-            if file_ext == '.csv':
-                self.file_type = 'csv'
-            elif file_ext in ['.xlsx', '.xls']:
-                self.file_type = 'spreadsheet'
-            elif file_ext in getattr(settings, 'GIS_FILE_EXTENSIONS', []) or file_ext in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', []):
-                self.file_type = 'gis'
-            elif file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
-                self.file_type = 'image'
-            elif file_ext in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml']:
-                self.file_type = 'text'
-            elif file_ext in ['.pdf', '.doc', '.docx', '.ppt', '.pptx']:
-                self.file_type = 'document'
-            else:
-                self.file_type = 'other'
+            self.apply_extension_metadata(self.file.name)
         
         super().save(*args, **kwargs)
 
@@ -440,6 +449,19 @@ class File(models.Model):
                 f"File {self.id} has no stored content and no reference path"
             )
         return self.file.open(mode)
+
+    @property
+    def local_path(self):
+        """Filesystem path to this File's bytes.
+
+        For tools that need a path rather than a handle: GDAL, geopandas and the
+        GeoServer ingestion helpers all open files by name. ADAPT references
+        resolve to their path on the mount, so those tools work on warehouse
+        files without a copy into MEDIA_ROOT.
+        """
+        if self.is_adapt_reference():
+            return self.third_party_url
+        return self.file.path
 
     @property
     def preview_url(self):

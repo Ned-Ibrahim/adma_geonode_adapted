@@ -13,6 +13,12 @@ relative to the mount (third_party_id), so re-running only adds what is new,
 refreshes sizes that changed, and, with --prune, removes rows whose file is
 gone from the share or now falls under an exclusion.
 
+Rows are matched regardless of who owns them. A file or folder created through
+ADMA (see filemanager/adapt_storage.py) is written onto the share and recorded
+as an ADAPT row owned by the user who made it, so that it stays attributable.
+Matching on owner here would hide those rows from the walk: every run would
+duplicate them and every prune would delete the originals.
+
 Some directories on the share are not warehouse data and are never indexed:
 ADMA's own production storage (adma_geo_production, pg_data), Windows system
 folders, and hidden files. See DEFAULT_EXCLUDED_NAMES / DEFAULT_EXCLUDED_FILES.
@@ -29,6 +35,7 @@ import mimetypes
 import os
 from pathlib import Path, PurePosixPath
 
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -83,8 +90,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--once', action='store_true',
                             help='Actually write to the database. Without it: dry run.')
-        parser.add_argument('--mount', type=str, default='/adapt',
-                            help='Where the ADAPT share is mounted inside the container.')
+        parser.add_argument('--mount', type=str, default=getattr(settings, 'ADAPT_MOUNT', '/adapt'),
+                            help='Where the ADAPT share is mounted inside the container. '
+                                 'Default: settings.ADAPT_MOUNT.')
         parser.add_argument('--subdir', type=str, default='',
                             help='Limit the walk to this directory under the mount. '
                                  'Default: the whole share.')
@@ -165,17 +173,19 @@ class Command(BaseCommand):
         self.stdout.write('')
 
         # Preload everything under the start folder once, instead of one query per file.
+        # Any owner: rows created through ADMA belong to the user who made them.
+        # Newest first, so that if two rows ever share a name the oldest one wins.
         subtree_folder_ids = self._collect_subtree_ids(start_folder)
         existing_files = {}
         for f in File.objects.filter(
-            folder_id__in=subtree_folder_ids, owner=self.owner,
+            folder_id__in=subtree_folder_ids,
             is_third_party=True, third_party_source='adapt',
-        ).only('id', 'name', 'folder_id', 'file_size', 'third_party_id', 'third_party_url'):
+        ).order_by('-created_at').only('id', 'name', 'folder_id', 'file_size', 'third_party_id', 'third_party_url'):
             existing_files[(f.folder_id, f.name)] = f
         for fo in Folder.objects.filter(
-            id__in=subtree_folder_ids, owner=self.owner,
+            id__in=subtree_folder_ids,
             is_third_party=True, third_party_source='adapt',
-        ).only('id', 'name', 'parent_id', 'third_party_id'):
+        ).order_by('-created_at').only('id', 'name', 'parent_id', 'third_party_id'):
             self.existing_folders[(fo.parent_id, fo.name)] = fo
         # Snapshot the ids before the walk adds new rows: prune removes what is here but not seen.
         existing_file_ids = {f.id for f in existing_files.values()}
@@ -368,7 +378,12 @@ class Command(BaseCommand):
         rel = self._rel(abs_path)[:ID_MAX]
         folder = self.existing_folders.get((parent.id, name))
         if folder is None and parent.pk and not parent._state.adding:
-            folder = Folder.objects.filter(name=name, parent=parent, owner=self.owner).first()
+            # An ADAPT row of any owner, as in the preload, oldest first so the match
+            # is stable; failing that, any row of the sync account's, as before.
+            folder = Folder.objects.filter(
+                name=name, parent=parent, is_third_party=True, third_party_source='adapt',
+            ).order_by('created_at').first() or Folder.objects.filter(
+                name=name, parent=parent, owner=self.owner).first()
         if folder is not None:
             if folder.third_party_id != rel and self.write:
                 folder.third_party_id = rel

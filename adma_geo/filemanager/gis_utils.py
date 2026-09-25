@@ -345,7 +345,7 @@ def find_shapefile_components(extracted_files):
 def process_gis_file(file_obj):
     """Process GIS file and extract spatial information"""
     try:
-        file_path = file_obj.file.path
+        file_path = file_obj.local_path
         file_ext = Path(file_path).suffix.lower()
         
         # Handle different file types
@@ -498,7 +498,7 @@ def publish_to_geoserver_legacy(file_obj):
         if not geoserver_api.create_workspace():
             return False, "Failed to create/verify GeoServer workspace"
         
-        file_path = file_obj.file.path
+        file_path = file_obj.local_path
         file_ext = Path(file_path).suffix.lower()
         
         # Handle different file types
@@ -669,7 +669,7 @@ def bundle_and_publish_shapefile_legacy(shp_file_obj):
             # Copy all components to temp directory with CONSISTENT base name
             bundled_files = {}
             for ext, file_obj in component_files.items():
-                source_path = file_obj.file.path
+                source_path = file_obj.local_path
                 target_name = f"{base_name}{ext}"
                 target_path = os.path.join(temp_dir, target_name)
                 

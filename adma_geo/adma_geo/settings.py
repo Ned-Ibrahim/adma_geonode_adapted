@@ -190,6 +190,24 @@ ALL_SPATIAL_EXTENSIONS = [
     '.tiff', '.tif', '.geotiff', '.geotif', '.zip'
 ]
 
+# ADAPT warehouse share
+# The share is mounted over CIFS by docker-compose.adapt.yml. ADMA indexes it by
+# reference (see filemanager/adapt_storage.py) rather than copying its contents.
+ADAPT_MOUNT = os.environ.get('ADAPT_MOUNT', '/adapt')
+
+# Allow ADMA to write uploads back onto the share. Off unless explicitly enabled,
+# because it requires the mount and the service account to both be read-write.
+ADAPT_WRITE_ENABLED = os.environ.get('ADAPT_WRITE_ENABLED', 'False').lower() == 'true'
+
+# Optional narrowing of where write-back may land: comma-separated paths relative
+# to the mount, e.g. "Data Management,Shared/Incoming". Empty means the whole
+# share is writable, which is the current deployment choice.
+ADAPT_WRITABLE_PREFIXES = [
+    p.strip().strip('/').replace('\\', '/')
+    for p in os.environ.get('ADAPT_WRITABLE_PREFIXES', '').split(',')
+    if p.strip()
+]
+
 # Proxy Settings for HTTPS detection
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True

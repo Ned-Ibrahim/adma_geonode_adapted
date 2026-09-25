@@ -113,7 +113,7 @@ class SystematicGeoServerManager:
             if not self.geoserver_api.create_workspace():
                 return False, "Failed to create/verify GeoServer workspace", None
             
-            file_path = file_obj.file.path
+            file_path = file_obj.local_path
             file_ext = Path(file_path).suffix.lower()
             
             logger.info(f"Publishing with temporary renamed file strategy: {file_obj.name}")
@@ -241,7 +241,7 @@ class SystematicGeoServerManager:
                     temp_component_name = f"{systematic_name}{ext}"
                     temp_component_path = Path(temp_dir) / temp_component_name
                     
-                    shutil.copy2(comp.file.path, temp_component_path)
+                    shutil.copy2(comp.local_path, temp_component_path)
                     component_files[ext] = str(temp_component_path)
                     
                     logger.info(f"  Copied component: {comp.name} -> {temp_component_name}")

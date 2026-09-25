@@ -14,6 +14,7 @@ from django.contrib.auth import authenticate
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from contextlib import nullcontext
 import zipfile
 import io
 import os
@@ -21,12 +22,12 @@ from django.utils.text import slugify
 
 from .middleware import PASSWORD_CHANGE_MESSAGE
 from .models import File, Folder, must_change_password
-from . import permissions
+from . import adapt_storage, permissions
 from .serializers import (
     FileUploadSerializer, FolderUploadSerializer, FileDownloadSerializer,
     FolderDownloadSerializer, TokenCreateSerializer, FileSerializer, FolderSerializer
 )
-from .views import generate_unique_name
+from .views import UploadRefused, generate_unique_name, upload_target, validate_adapt_paths
 from .tasks import process_gis_file_task
 
 
@@ -134,38 +135,39 @@ def api_upload_files(request):
     folder_id = serializer.validated_data.get('folder_id')
     is_public = serializer.validated_data.get('is_public', False)
     
-    # Get folder if specified
-    folder = None
-    if folder_id:
-        try:
-            folder = Folder.objects.get(id=folder_id, owner=request.user)
-        except Folder.DoesNotExist:
-            return Response(
-                {'error': 'Folder not found or access denied'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+    try:
+        folder = upload_target(request.user, folder_id)
+    except UploadRefused as refused:
+        message = 'Folder not found or access denied' if refused.status == 404 else str(refused)
+        return Response({'error': message}, status=refused.status)
+    to_adapt = adapt_storage.is_adapt_folder(folder)
     
     uploaded_files = []
     
     try:
-        with transaction.atomic():
+        # A rollback cannot unwrite the share, so ADAPT uploads are not wrapped in
+        # a transaction: each file that reaches the share keeps its row.
+        with nullcontext() if to_adapt else transaction.atomic():
             for uploaded_file in files:
-                # Generate unique filename if duplicate exists
-                unique_filename = generate_unique_name(
-                    uploaded_file.name,
-                    request.user,
-                    folder=folder,
-                    is_folder=False
-                )
-                
-                # Create file object
-                file_obj = File.objects.create(
-                    name=unique_filename,
-                    file=uploaded_file,
-                    folder=folder,
-                    owner=request.user,
-                    is_public=is_public
-                )
+                if to_adapt:
+                    file_obj = adapt_storage.create_reference_upload(folder, uploaded_file, owner=request.user)
+                else:
+                    # Generate unique filename if duplicate exists
+                    unique_filename = generate_unique_name(
+                        uploaded_file.name,
+                        request.user,
+                        folder=folder,
+                        is_folder=False
+                    )
+
+                    # Create file object
+                    file_obj = File.objects.create(
+                        name=unique_filename,
+                        file=uploaded_file,
+                        folder=folder,
+                        owner=request.user,
+                        is_public=is_public
+                    )
                 
                 # Trigger GIS processing for spatial files
                 if file_obj.is_spatial:
@@ -188,6 +190,9 @@ def api_upload_files(request):
             'message': f'Successfully uploaded {len(uploaded_files)} files'
         }, status=status.HTTP_201_CREATED)
         
+    except adapt_storage.AdaptWriteError as e:
+        # Files before this one are on the share already; say which.
+        return Response({'error': str(e), 'files': uploaded_files}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response(
             {'error': f'Upload failed: {str(e)}'}, 
@@ -234,19 +239,17 @@ def api_upload_folders(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Get parent folder if specified
-    parent_folder = None
-    if folder_id:
-        try:
-            parent_folder = Folder.objects.get(id=folder_id, owner=request.user)
-        except Folder.DoesNotExist:
-            return Response(
-                {'error': 'Parent folder not found or access denied'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+    try:
+        parent_folder = upload_target(request.user, folder_id)
+    except UploadRefused as refused:
+        message = 'Parent folder not found or access denied' if refused.status == 404 else str(refused)
+        return Response({'error': message}, status=refused.status)
+    to_adapt = adapt_storage.is_adapt_folder(parent_folder)
     
     try:
-        with transaction.atomic():
+        if to_adapt:
+            validate_adapt_paths(file_paths)
+        with nullcontext() if to_adapt else transaction.atomic():
             # Use the same logic as the original upload_folders view
             # This is a simplified version - you can expand it based on your needs
             folders_created = 0
@@ -263,7 +266,12 @@ def api_upload_folders(request):
                 for i, folder_name in enumerate(path_parts[:-1]):  # Exclude filename
                     folder_path = '/'.join(path_parts[:i+1])
                     
-                    if folder_path not in folder_cache:
+                    if folder_path not in folder_cache and to_adapt:
+                        # Merge into the directory on the share, making it if needed.
+                        folder_cache[folder_path], created = adapt_storage.child_folder(
+                            current_folder, folder_name, owner=request.user)
+                        folders_created += int(created)
+                    elif folder_path not in folder_cache:
                         # Check if folder exists
                         try:
                             existing_folder = Folder.objects.get(
@@ -293,20 +301,24 @@ def api_upload_folders(request):
                 
                 # Upload file to the final folder
                 filename = path_parts[-1]
-                unique_filename = generate_unique_name(
-                    filename,
-                    request.user,
-                    folder=current_folder,
-                    is_folder=False
-                )
-                
-                file_obj = File.objects.create(
-                    name=unique_filename,
-                    file=uploaded_file,
-                    folder=current_folder,
-                    owner=request.user,
-                    is_public=is_public
-                )
+                if to_adapt:
+                    file_obj = adapt_storage.create_reference_upload(
+                        current_folder, uploaded_file, owner=request.user, preferred_name=filename)
+                else:
+                    unique_filename = generate_unique_name(
+                        filename,
+                        request.user,
+                        folder=current_folder,
+                        is_folder=False
+                    )
+
+                    file_obj = File.objects.create(
+                        name=unique_filename,
+                        file=uploaded_file,
+                        folder=current_folder,
+                        owner=request.user,
+                        is_public=is_public
+                    )
                 
                 # Trigger GIS processing for spatial files
                 if file_obj.is_spatial:
@@ -321,6 +333,8 @@ def api_upload_folders(request):
                 'message': f'Successfully uploaded folder structure: {folders_created} folders, {files_uploaded} files'
             }, status=status.HTTP_201_CREATED)
             
+    except adapt_storage.AdaptWriteError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response(
             {'error': f'Folder upload failed: {str(e)}'}, 

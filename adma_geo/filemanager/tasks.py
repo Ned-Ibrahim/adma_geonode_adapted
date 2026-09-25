@@ -418,7 +418,7 @@ def run_seeding_tool_task(self, file_id, output_dir_id=None):
             return {"success": False, "error": error_msg}
         
         # Get the input file path
-        input_path = file_obj.file.path
+        input_path = file_obj.local_path
         
         # Determine output directory and folder
         from .models import Folder
@@ -623,7 +623,7 @@ def run_shape_to_json_task(self, file_id, output_dir_id=None):
             return {"success": False, "error": error_msg}
         
         # Get the input file path
-        input_path = file_obj.file.path
+        input_path = file_obj.local_path
         
         # Determine output directory and folder
         from .models import Folder
@@ -796,7 +796,7 @@ def run_si_tool_task(
         # Get buffer sectors file (required for all workflows)
         try:
             buffer_file = File.objects.get(id=buffer_sectors_file_id)
-            buffer_sectors_path = buffer_file.file.path
+            buffer_sectors_path = buffer_file.local_path
         except File.DoesNotExist:
             return {"success": False, "error": "Buffer sectors file not found"}
         
@@ -805,7 +805,7 @@ def run_si_tool_task(
         if ndre_file_id:
             try:
                 ndre_file = File.objects.get(id=ndre_file_id)
-                ndre_path = ndre_file.file.path
+                ndre_path = ndre_file.local_path
             except File.DoesNotExist:
                 return {"success": False, "error": "NDRE file not found"}
         
@@ -815,7 +815,7 @@ def run_si_tool_task(
         if csv_file_id:
             try:
                 csv_file = File.objects.get(id=csv_file_id)
-                csv_path = csv_file.file.path
+                csv_path = csv_file.local_path
             except File.DoesNotExist:
                 return {"success": False, "error": "CSV file not found"}
         
@@ -824,7 +824,7 @@ def run_si_tool_task(
         if indicator_block_file_id:
             try:
                 indicator_file = File.objects.get(id=indicator_block_file_id)
-                indicator_block_path = indicator_file.file.path
+                indicator_block_path = indicator_file.local_path
             except File.DoesNotExist:
                 return {"success": False, "error": "Indicator block file not found"}
         

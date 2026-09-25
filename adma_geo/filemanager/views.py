@@ -13,11 +13,12 @@ from django.db.models import Q, Count, Sum
 from django.urls import reverse_lazy
 from django.conf import settings
 from django.contrib.staticfiles import finders
+from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
 from .forms import FolderForm, FileUploadForm, NewPasswordChangeForm
 from .tasks import process_gis_file_task
-from . import permissions
+from . import adapt_storage, permissions
 
 def get_robust_user_statistics(user):
     """
@@ -91,6 +92,62 @@ def get_robust_user_statistics(user):
         }
     
     return stats
+
+READ_ONLY_MESSAGE = 'You have read-only access to this ADAPT folder.'
+
+
+class UploadRefused(Exception):
+    """An upload or a new folder may not land where it was sent. Carries the HTTP status to answer with."""
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
+def upload_target(user, folder_id):
+    """The Folder an upload or a new folder lands in, or None for the top level.
+
+    A user's own folders take writes from their owner only, as before. An ADAPT
+    folder takes them from a user with a write grant on it (superusers included,
+    see permissions.can_write), and only while ADAPT_WRITE_ENABLED is on; the
+    bytes then go onto the share through adapt_storage, never into MEDIA_ROOT.
+    A folder the user cannot see is reported missing, as everywhere else; one
+    they can see but not write to is refused with the reason.
+    """
+    if not folder_id:
+        return None
+    try:
+        folder = Folder.objects.filter(id=folder_id).first()
+    except (ValueError, ValidationError):
+        folder = None
+    if folder is None or not permissions.can_read(user, folder):
+        raise UploadRefused('Folder not found', 404)
+    if not adapt_storage.is_adapt_folder(folder):
+        if folder.owner_id != user.id:
+            raise UploadRefused('Folder not found', 404)
+        return folder
+    if not permissions.can_write(user, folder):
+        raise UploadRefused(READ_ONLY_MESSAGE, 403)
+    if not adapt_storage.write_enabled():
+        raise UploadRefused(adapt_storage.WRITE_DISABLED_MESSAGE, 403)
+    return folder
+
+
+def can_upload_into(user, folder):
+    """Whether upload_target would accept `folder` for this user. For showing or hiding upload controls."""
+    try:
+        upload_target(user, folder.pk)
+    except UploadRefused:
+        return False
+    return True
+
+
+def validate_adapt_paths(file_paths):
+    """Check every folder and file name in a folder upload before anything is written to the share."""
+    for file_path in file_paths:
+        for part in file_path.split('/'):
+            adapt_storage.validate_name(part)
+
 
 def generate_unique_name(name, owner, folder=None, is_folder=False):
     """
@@ -632,6 +689,8 @@ def folder_detail(request, folder_id):
         'files': files,
         'breadcrumbs': folder.get_breadcrumbs(),
         'can_edit': folder.owner == request.user,
+        'can_upload': can_upload_into(request.user, folder),
+        'is_adapt': adapt_storage.is_adapt_folder(folder),
         'is_public_view': False,
         'page_obj': page_obj,
         'total_items': total_items,
@@ -1190,26 +1249,31 @@ def create_folder(request):
             if not folder_name:
                 return JsonResponse({'error': 'Folder name is required'}, status=400)
             
-            # Get parent folder if specified
-            parent_folder = None
-            if parent_id:
-                parent_folder = get_object_or_404(Folder, id=parent_id, owner=request.user)
+            try:
+                parent_folder = upload_target(request.user, parent_id)
+            except UploadRefused as refused:
+                return JsonResponse({'error': str(refused)}, status=refused.status)
             
-            # Generate unique folder name if duplicate exists
-            unique_folder_name = generate_unique_name(
-                folder_name,
-                request.user,
-                folder=parent_folder,
-                is_folder=True
-            )
-            
-            # Create folder with unique name
-            folder = Folder.objects.create(
-                name=unique_folder_name,
-                parent=parent_folder,
-                owner=request.user,
-                is_public=is_public
-            )
+            if adapt_storage.is_adapt_folder(parent_folder):
+                # The directory on the share and its row are made together, so a
+                # folder in the tree always has one on the warehouse behind it.
+                folder = adapt_storage.create_reference_folder(parent_folder, folder_name, owner=request.user)
+            else:
+                # Generate unique folder name if duplicate exists
+                unique_folder_name = generate_unique_name(
+                    folder_name,
+                    request.user,
+                    folder=parent_folder,
+                    is_folder=True
+                )
+
+                # Create folder with unique name
+                folder = Folder.objects.create(
+                    name=unique_folder_name,
+                    parent=parent_folder,
+                    owner=request.user,
+                    is_public=is_public
+                )
             
             # Embedding generation handled automatically by post_save signal
             
@@ -1224,6 +1288,8 @@ def create_folder(request):
             
         except json.JSONDecodeError:
             return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+        except adapt_storage.AdaptWriteError as e:
+            return JsonResponse({'error': str(e)}, status=400)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
     
@@ -1241,29 +1307,39 @@ def upload_files(request):
             if not files:
                 return JsonResponse({'error': 'No files selected'}, status=400)
             
-            # Get folder if specified
-            folder = None
-            if folder_id:
-                folder = get_object_or_404(Folder, id=folder_id, owner=request.user)
+            try:
+                folder = upload_target(request.user, folder_id)
+            except UploadRefused as refused:
+                return JsonResponse({'error': str(refused)}, status=refused.status)
+            to_adapt = adapt_storage.is_adapt_folder(folder)
             
             uploaded_files = []
             for uploaded_file in files:
-                # Generate unique filename if duplicate exists
-                unique_filename = generate_unique_name(
-                    uploaded_file.name,
-                    request.user,
-                    folder=folder,
-                    is_folder=False
-                )
-                
-                # Create file object with unique name
-                file_obj = File.objects.create(
-                    name=unique_filename,
-                    file=uploaded_file,
-                    folder=folder,
-                    owner=request.user,
-                    is_public=is_public
-                )
+                if to_adapt:
+                    # Names are deduplicated on the share itself, where they are
+                    # reserved, rather than against the database.
+                    try:
+                        file_obj = adapt_storage.create_reference_upload(folder, uploaded_file, owner=request.user)
+                    except adapt_storage.AdaptWriteError as e:
+                        # Files before this one are on the share already; say which.
+                        return JsonResponse({'error': str(e), 'files': uploaded_files}, status=400)
+                else:
+                    # Generate unique filename if duplicate exists
+                    unique_filename = generate_unique_name(
+                        uploaded_file.name,
+                        request.user,
+                        folder=folder,
+                        is_folder=False
+                    )
+
+                    # Create file object with unique name
+                    file_obj = File.objects.create(
+                        name=unique_filename,
+                        file=uploaded_file,
+                        folder=folder,
+                        owner=request.user,
+                        is_public=is_public
+                    )
                 
                 # Trigger GIS processing for spatial files  
                 if file_obj.is_spatial:
@@ -1424,6 +1500,18 @@ def delete_folder_complete(folder_obj):
         raise
 
 
+def _adapt_delete_refusal(user, item):
+    """A 403 response if `item` is an ADAPT row the user may not remove, else None.
+
+    Deleting an ADAPT row never deletes on the share: only the row goes, and the
+    next sync lists the file again. Even so it takes write access, so a user
+    whose grant is read-only cannot remove rows, not even their own uploads.
+    """
+    if item.is_third_party and item.third_party_source == 'adapt' and not permissions.can_write(user, item):
+        return JsonResponse({'error': READ_ONLY_MESSAGE}, status=403)
+    return None
+
+
 @login_required
 def delete_item(request):
     """Delete file or folder via AJAX - async with immediate response"""
@@ -1436,6 +1524,9 @@ def delete_item(request):
             if item_type == 'file':
                 item = get_object_or_404(File, id=item_id, owner=request.user)
                 item_name = item.name
+                refused = _adapt_delete_refusal(request.user, item)
+                if refused:
+                    return refused
                 
                 # Mark as deletion in progress to hide from queries
                 item.deletion_in_progress = True
@@ -1456,6 +1547,9 @@ def delete_item(request):
             elif item_type == 'folder':
                 item = get_object_or_404(Folder, id=item_id, owner=request.user)
                 item_name = item.name
+                refused = _adapt_delete_refusal(request.user, item)
+                if refused:
+                    return refused
                 
                 # Mark as deletion in progress to hide from queries
                 item.deletion_in_progress = True
@@ -1652,10 +1746,13 @@ def upload_folders(request):
             if not files or len(files) != len(file_paths):
                 return JsonResponse({'error': 'No files selected or paths mismatch'}, status=400)
             
-            # Get parent folder if specified
-            parent_folder = None
-            if folder_id:
-                parent_folder = get_object_or_404(Folder, id=folder_id, owner=request.user)
+            try:
+                parent_folder = upload_target(request.user, folder_id)
+            except UploadRefused as refused:
+                return JsonResponse({'error': str(refused)}, status=refused.status)
+            to_adapt = adapt_storage.is_adapt_folder(parent_folder)
+            if to_adapt:
+                validate_adapt_paths(file_paths)
             
             # First, identify unique root folders and their target names
             root_folders = {}  # original_name -> unique_name
@@ -1666,7 +1763,10 @@ def upload_folders(request):
                 path_parts = file_path.split('/')
                 if len(path_parts) > 1:  # File is inside a folder
                     root_folder_name = path_parts[0]
-                    if root_folder_name not in root_folders:
+                    if root_folder_name not in root_folders and to_adapt:
+                        # On the share the name is settled when the directory is made.
+                        root_folders[root_folder_name] = root_folder_name
+                    elif root_folder_name not in root_folders:
                         # Generate unique name for this root folder
                         unique_root_name = generate_unique_name(
                             root_folder_name,
@@ -1707,35 +1807,46 @@ def upload_folders(request):
                     current_path = f"{current_path}/{folder_name}" if current_path else folder_name
                     
                     if current_path not in created_folders:
-                        # Create new folder (no need to check for existing since we already made names unique)
-                        folder = Folder.objects.create(
-                            name=folder_name,
-                            parent=current_folder,
-                            owner=request.user,
-                            is_public=is_public
-                        )
+                        if to_adapt:
+                            folder = adapt_storage.create_reference_folder(
+                                current_folder, folder_name, owner=request.user)
+                            if current_folder == parent_folder and folder.name != folder_name:
+                                # Taken on the share already: report it as renamed.
+                                root_folders[folder_name] = folder.name
+                        else:
+                            # Create new folder (no need to check for existing since we already made names unique)
+                            folder = Folder.objects.create(
+                                name=folder_name,
+                                parent=current_folder,
+                                owner=request.user,
+                                is_public=is_public
+                            )
                         created_folders[current_path] = folder
                         
                         # Embedding generation handled automatically by post_save signal
                     
                     current_folder = created_folders[current_path]
                 
-                # Generate unique filename if duplicate exists
-                unique_filename = generate_unique_name(
-                    filename,
-                    request.user,
-                    folder=current_folder,
-                    is_folder=False
-                )
-                
-                # Create file object with unique name
-                file_obj = File.objects.create(
-                    name=unique_filename,
-                    file=uploaded_file,
-                    folder=current_folder,
-                    owner=request.user,
-                    is_public=is_public
-                )
+                if to_adapt:
+                    file_obj = adapt_storage.create_reference_upload(
+                        current_folder, uploaded_file, owner=request.user, preferred_name=filename)
+                else:
+                    # Generate unique filename if duplicate exists
+                    unique_filename = generate_unique_name(
+                        filename,
+                        request.user,
+                        folder=current_folder,
+                        is_folder=False
+                    )
+
+                    # Create file object with unique name
+                    file_obj = File.objects.create(
+                        name=unique_filename,
+                        file=uploaded_file,
+                        folder=current_folder,
+                        owner=request.user,
+                        is_public=is_public
+                    )
                 
                 # Trigger GIS processing for spatial files  
                 if file_obj.is_spatial:
@@ -1783,6 +1894,8 @@ def upload_folders(request):
                 'message': message
             })
             
+        except adapt_storage.AdaptWriteError as e:
+            return JsonResponse({'error': str(e)}, status=400)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
     
@@ -3007,6 +3120,15 @@ def rename_file(request):
         if file_obj.owner != request.user:
             return JsonResponse({'success': False, 'error': 'Permission denied. Only the owner can rename this file.'}, status=403)
         
+        # Renames are not written through to the share, so allowing one would
+        # leave the name in ADMA and the name on the warehouse disagreeing, and
+        # the next sync_adapt would list the file again under its real name.
+        if file_obj.is_third_party and file_obj.third_party_source == 'adapt':
+            return JsonResponse({
+                'success': False,
+                'error': 'Files on the ADAPT share cannot be renamed from ADMA.'
+            }, status=400)
+
         # Validate new name
         if '/' in new_name or '\\' in new_name:
             return JsonResponse({'success': False, 'error': 'File name cannot contain slashes'}, status=400)

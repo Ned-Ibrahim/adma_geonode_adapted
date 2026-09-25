@@ -129,6 +129,9 @@
                     {% if folder.is_public %}
                         <span class="badge bg-info me-2">Public</span>
                     {% endif %}
+                    {% if is_adapt and not can_upload %}
+                        <span class="badge bg-secondary me-2" title="You can open and download files here, but not upload or change them.">Read only</span>
+                    {% endif %}
                     Created by {{ folder.owner.username }} on {{ folder.created_at|date:"M d, Y" }}
                 </p>
             </div>
@@ -138,7 +141,7 @@
 
 <!-- Main content + Actions sidebar (two columns; sidebar only when folder is owned by current user) -->
 <div class="row">
-    <div class="{% if can_edit %}col-lg-8{% else %}col-12{% endif %}">
+    <div class="{% if can_edit or can_upload %}col-lg-8{% else %}col-12{% endif %}">
 <!-- Folder Metadata Panel -->
 <div class="row mb-4">
     <div class="col-12">
@@ -679,7 +682,7 @@
                     <i class="fas fa-folder-open" style="font-size: 4rem; color: #007bff; opacity: 0.3;"></i>
                     <h4 class="mt-3 text-muted">This folder is empty</h4>
                     <p class="text-muted">Add files or create subfolders to organize your data</p>
-                    {% if can_edit %}
+                    {% if can_upload %}
                     <div class="d-flex justify-content-center gap-2 mt-3">
                         <button class="btn btn-outline-primary" onclick="showCreateFolderModal()">
                             <i class="fas fa-folder-plus me-2"></i>Create Folder
@@ -753,8 +756,8 @@
 </div>
 
     </div>
-    {% if can_edit %}
-    <!-- Actions panel: only shown when folder is owned by current user -->
+    {% if can_edit or can_upload %}
+    <!-- Actions panel: shown to the folder's owner, and in ADAPT folders to users who may upload -->
     <div class="col-lg-4">
         <div class="card">
             <div class="card-header">
@@ -783,6 +786,7 @@
                             </a>
                         {% endif %}
                     {% endif %}
+                    {% if can_upload %}
                     <button type="button" class="btn btn-outline-primary" onclick="showCreateFolderModal()">
                         <i class="fas fa-folder-plus me-2"></i>New Folder
                     </button>
@@ -792,12 +796,15 @@
                     <button type="button" class="btn btn-primary" onclick="showUploadModal()">
                         <i class="fas fa-upload me-2"></i>Upload Files
                     </button>
+                    {% endif %}
+                    {% if can_edit %}
                     <button type="button" class="btn btn-outline-primary" onclick="toggleVisibility()">
                         <i class="fas fa-exchange-alt me-2"></i>Toggle Visibility
                     </button>
                     <button type="button" class="btn btn-danger" onclick="deleteFolder()">
                         <i class="fas fa-trash me-2"></i>Delete Folder
                     </button>
+                    {% endif %}
                 </div>
                 <div class="mt-4">
                     <h6>Folder Details</h6>
@@ -818,8 +825,8 @@
     {% endif %}
 </div>
 
-<!-- Include modals if user can edit -->
-{% if can_edit %}
+<!-- Include modals if user can edit or upload -->
+{% if can_edit or can_upload %}
 <!-- Create Folder Modal -->
 <div class="modal fade" id="createFolderModal" tabindex="-1">
     <div class="modal-dialog">
@@ -834,7 +841,7 @@
                         <label for="folderName" class="form-label">Folder Name</label>
                         <input type="text" class="form-control" id="folderName" required>
                     </div>
-                    <div class="form-check">
+                    <div class="form-check{% if is_adapt %} d-none{% endif %}">
                         <input class="form-check-input" type="checkbox" id="folderIsPublic">
                         <label class="form-check-label" for="folderIsPublic">
                             Make this folder public
@@ -870,7 +877,7 @@
                         <h6>Selected Files:</h6>
                         <ul id="fileList" class="list-group"></ul>
                     </div>
-                    <div class="form-check mt-3">
+                    <div class="form-check mt-3{% if is_adapt %} d-none{% endif %}">
                         <input class="form-check-input" type="checkbox" id="filesArePublic">
                         <label class="form-check-label" for="filesArePublic">
                             Make these files public
@@ -890,7 +897,7 @@
 {% endblock %}
 
 {% block extra_js %}
-{% if can_edit %}
+{% if can_edit or can_upload %}
 <script>
 // CSRF token setup
 function getCookie(name) {
@@ -2463,7 +2470,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             </div>
                         </div>
                     </div>
-                    <div class="form-check mt-3">
+                    <div class="form-check mt-3{% if is_adapt %} d-none{% endif %}">
                         <input class="form-check-input" type="checkbox" id="foldersArePublic">
                         <label class="form-check-label" for="foldersArePublic">
                             Make uploaded folders and files public
