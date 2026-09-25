@@ -7,7 +7,13 @@ so the export is the only source of ADAPT access afterwards:
 
 - NEAD\\<NUID> becomes a grant for the account with that NUID (adapt_users load
   stores it), NEAD\\<group> a grant for the Django group of that name.
-- ReadAndExecute (or Read) gives read, FullControl or Modify gives write.
+- Rights become a FileSystemRights mask, from the names Get-Acl prints or
+  from the number it prints for masks it has no name for (generic rights
+  such as 268435456 or -1610612736 are mapped to file rights first). Read
+  needs ReadData, as Read and ReadAndExecute have; write also needs
+  WriteData, AppendData and a delete right, as Modify and FullControl have
+  (see filemanager.ntfs_acl). Write without a delete right is imported as
+  read and listed. Rights that cannot be parsed on a NEAD identity, and
   Deny entries, which a grant cannot express, stop the command.
 - Anything else is listed and not imported: built-in and local identities
   (BUILTIN\\Users, BUILTIN\\Administrators, CREATOR OWNER, NT AUTHORITY\\SYSTEM),
@@ -155,6 +161,11 @@ class Command(BaseCommand):
             entries = read_export(path)
         except ExportError as exc:
             raise CommandError(str(exc))
+        unreadable = [e for e in entries if e.mask is None and e.identity.upper().startswith(f'{DOMAIN}\\')]
+        if unreadable:
+            where = '; '.join(f'line {e.line}: {e.identity} on {e.display_path} has "{e.rights_text}"'
+                              for e in unreadable)
+            raise CommandError(f'The export has rights that are neither FileSystemRights names nor numbers: {where}')
         denies = [e for e in entries if not e.allow]
         if denies:
             where = '; '.join(f'line {e.line}: {e.identity} on {e.display_path}' for e in denies)
@@ -190,6 +201,10 @@ class Command(BaseCommand):
                 continue
             if not e.whole_subtree:
                 warnings.append(self._scope_warning(e, principal))
+            if e.writes_without_delete:
+                warnings.append(f'{e.identity} ({label(principal)}) {e.rights_text} on {e.display_path}: '
+                                'on snr18 they may create and change files but not delete them. '
+                                'ADMA has no such level, so this is imported as read.')
             key = (folder_id, principal[0], principal[1].pk)
             current = wanted.setdefault(key, [False, principal, e.path])
             current[0] = current[0] or e.writes

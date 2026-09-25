@@ -23,9 +23,55 @@ from dataclasses import dataclass
 COLUMNS = ('Path', 'Protected', 'Identity', 'Rights', 'Type', 'AppliesTo')
 ROOT = '(root)'
 
-READ_RIGHTS = frozenset({'Read', 'ReadAndExecute', 'Modify', 'FullControl'})
-WRITE_RIGHTS = frozenset({'Modify', 'FullControl'})
+# System.Security.AccessControl.FileSystemRights, by the names Get-Acl prints.
+# Several names share a bit: the first is the file meaning, the second the folder one.
+FILE_SYSTEM_RIGHTS = {
+    'ReadData': 0x1, 'ListDirectory': 0x1,
+    'WriteData': 0x2, 'CreateFiles': 0x2,
+    'AppendData': 0x4, 'CreateDirectories': 0x4,
+    'ReadExtendedAttributes': 0x8,
+    'WriteExtendedAttributes': 0x10,
+    'ExecuteFile': 0x20, 'Traverse': 0x20,
+    'DeleteSubdirectoriesAndFiles': 0x40,
+    'ReadAttributes': 0x80,
+    'WriteAttributes': 0x100,
+    'Delete': 0x10000,
+    'ReadPermissions': 0x20000,
+    'ChangePermissions': 0x40000,
+    'TakeOwnership': 0x80000,
+    'Synchronize': 0x100000,
+    'Read': 0x20089,
+    'ReadAndExecute': 0x200A9,
+    'Write': 0x116,
+    'Modify': 0x301BF,
+    'FullControl': 0x1F01FF,
+}
+RIGHT_NAMES = {name.lower(): mask for name, mask in FILE_SYSTEM_RIGHTS.items()}
 
+# Get-Acl prints a mask it has no name for as a number, a negative one when the
+# top bit is set. Those are mostly generic rights, which Windows maps to file rights.
+GENERIC_RIGHTS = {
+    0x80000000: 0x120089,    # GENERIC_READ: FILE_GENERIC_READ
+    0x40000000: 0x120116,    # GENERIC_WRITE: FILE_GENERIC_WRITE
+    0x20000000: 0x1200A0,    # GENERIC_EXECUTE: FILE_GENERIC_EXECUTE
+    0x10000000: 0x1F01FF,    # GENERIC_ALL: FILE_ALL_ACCESS
+}
+
+# What ADMA's two levels need, as FileSystemRights bits.
+#
+# read: ReadData (ListDirectory), so the folder can be listed and its files read.
+# Read and ReadAndExecute both have it. Traverse is not required: Windows gives
+# every account "Bypass traverse checking" by default.
+#
+# write: read, plus WriteData and AppendData (create and change files and
+# folders), plus Delete or DeleteSubdirectoriesAndFiles. That is what Modify and
+# FullControl hold, and an ADMA write grant also lets a user delete. Write
+# without a delete right (for example "Write, ReadAndExecute") therefore stays
+# read: ADMA has no level that creates and changes but never deletes, and
+# giving less than snr18 is the safe side. import lists those entries.
+READ_BITS = 0x1
+WRITE_BITS = 0x2 | 0x4
+DELETE_BITS = 0x10000 | 0x40
 # Built-in groups that on a domain server hold every signed-in domain account.
 EVERY_DOMAIN_USER = frozenset({'builtin\\users', 'everyone', 'nt authority\\authenticated users'})
 
@@ -45,16 +91,25 @@ class Entry:
     applies_to: str
 
     @property
-    def rights(self):
-        return frozenset(r.strip() for r in self.rights_text.split(','))
+    def mask(self):
+        """The rights as a FileSystemRights mask, generic bits mapped to file rights. None if unreadable."""
+        return rights_mask(self.rights_text)
 
     @property
     def reads(self):
-        return bool(self.rights & READ_RIGHTS)
+        mask = self.mask
+        return mask is not None and mask & READ_BITS == READ_BITS
 
     @property
     def writes(self):
-        return bool(self.rights & WRITE_RIGHTS)
+        mask = self.mask
+        return self.reads and mask & WRITE_BITS == WRITE_BITS and bool(mask & DELETE_BITS)
+
+    @property
+    def writes_without_delete(self):
+        """Read and write data but no delete right: snr18 gives more than read, ADMA can only give read."""
+        mask = self.mask
+        return self.reads and not self.writes and mask & WRITE_BITS == WRITE_BITS
 
     @property
     def _flags(self):
@@ -91,6 +146,32 @@ class Entry:
 
     def key(self):
         return self.identity.lower()
+
+
+def rights_mask(text):
+    """FileSystemRights mask for a Rights value such as "Modify, Synchronize" or "-1610612736".
+
+    Returns None when any part is neither a known name nor a 32 bit number.
+    """
+    mask = 0
+    parts = [part.strip() for part in (text or '').split(',')]
+    if not any(parts):
+        return None
+    for part in parts:
+        if part.lower() in RIGHT_NAMES:
+            mask |= RIGHT_NAMES[part.lower()]
+            continue
+        try:
+            number = int(part)
+        except ValueError:
+            return None
+        if not -2 ** 31 <= number < 2 ** 32:
+            return None
+        mask |= number & 0xFFFFFFFF
+    for generic, specific in GENERIC_RIGHTS.items():
+        if mask & generic:
+            mask = (mask & ~generic) | specific
+    return mask
 
 
 def split_path(text) -> tuple[str, ...]:

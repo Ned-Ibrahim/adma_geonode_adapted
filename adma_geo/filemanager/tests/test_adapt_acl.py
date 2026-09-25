@@ -214,6 +214,37 @@ class Import(AclTree):
         self.assertEqual(self.grants(), {})
         self.assertIn('CreateFiles, AppendData', out.split('Not imported:')[1])
 
+    def test_numeric_generic_rights_are_imported(self):
+        text = HEADER + entry('Soils', 'NEAD\\00000002', '268435456') + entry('Soils', 'NEAD\\00000003', '-1610612736')
+        self.import_export(text, '--apply')
+        self.assertEqual(self.grants(), {('ADAPT/Soils', 'user:bob2'): 'write', ('ADAPT/Soils', 'user:carol3'): 'read'})
+
+    def test_write_without_delete_is_imported_as_read_with_a_warning(self):
+        text = HEADER + entry('Soils', 'NEAD\\00000002', 'Write, ReadAndExecute, Synchronize')
+        out, error = self.import_export(text, '--apply')
+        self.assertIsNone(error)
+        self.assertEqual(self.grants(), {('ADAPT/Soils', 'user:bob2'): 'read'})
+        warnings = out.split('Warnings:')[1]
+        self.assertIn('NEAD\\00000002', warnings)
+        self.assertIn('not delete', warnings)
+
+    def test_unparsable_rights_on_a_nead_identity_stop_the_command(self):
+        text = EXPORT + entry('Soils', 'NEAD\\00000002', 'Bogus, Synchronize')
+        for action in ('import', 'check'):
+            with self.subTest(action=action):
+                args = ['--apply'] if action == 'import' else ['--roster', self.write('r.csv', ROSTER)]
+                _, error = self.run_acl(action, self.write('acl.csv', text), *args)
+                self.assertIsNotNone(error)
+                self.assertIn('Bogus, Synchronize', str(error))
+                self.assertIn(f'line {text.count(chr(10))}', str(error))
+        self.assertEqual(self.grants(), {})
+
+    def test_unparsable_rights_elsewhere_are_listed(self):
+        text = HEADER + entry('Soils', 'BUILTIN\\Users', 'Bogus') + entry('Soils', 'NEAD\\00000002', 'FullControl')
+        out, error = self.import_export(text, '--apply')
+        self.assertIsNone(error)
+        self.assertIn('BUILTIN\\Users', out.split('Not imported:')[1])
+
     def test_inherited_entries_are_skipped_when_the_export_marks_them(self):
         text = ('"Path","Protected","Identity","Rights","Type","AppliesTo","IsInherited"\n'
                 f'"Soils","False","NEAD\\00000002","FullControl","Allow","{ALL}","True"\n'
@@ -281,6 +312,65 @@ class WindowsInheritance(SimpleTestCase):
     def test_identities_compare_without_case(self):
         tree = acl(('A', 'NEAD\\SNR_Team', READ, False, ALL))
         self.assertEqual(tree.access(('A',), {'nead\\snr_team'}), (True, False))
+
+
+class Rights(SimpleTestCase):
+    """How the Rights column becomes read or write, named or numeric as Get-Acl prints it."""
+
+    def access(self, rights, applies_to=ALL, path=('A',)):
+        return acl(('A', 'NEAD\\u1', rights, False, applies_to)).access(path, {'NEAD\\u1'})
+
+    def test_named_rights(self):
+        cases = {
+            'FullControl': (True, True),
+            'Modify, Synchronize': (True, True),
+            'ReadAndExecute, Synchronize': (True, False),
+            'Read, Synchronize': (True, False),
+            'ListDirectory, ReadAttributes': (True, False),
+            'CreateFiles, AppendData, Synchronize': (False, False),
+            'Traverse, Synchronize': (False, False),
+        }
+        for rights, expected in cases.items():
+            with self.subTest(rights=rights):
+                self.assertEqual(self.access(rights), expected)
+
+    def test_numeric_rights_including_generic_ones(self):
+        cases = {
+            '2032127': (True, True),        # FullControl
+            '1245631': (True, True),        # Modify, Synchronize
+            '1179817': (True, False),       # ReadAndExecute, Synchronize
+            '268435456': (True, True),      # GENERIC_ALL
+            '-536805376': (True, True),     # GENERIC_READ, GENERIC_WRITE, GENERIC_EXECUTE and DELETE
+            '-1610612736': (True, False),   # GENERIC_READ and GENERIC_EXECUTE
+            '-2147483648': (True, False),   # GENERIC_READ
+            '1073741824': (False, False),   # GENERIC_WRITE alone: no read, no delete
+        }
+        for rights, expected in cases.items():
+            with self.subTest(rights=rights):
+                self.assertEqual(self.access(rights), expected)
+
+    def test_generic_all_inherited_by_subfolders_gives_write(self):
+        inherit_only = 'ContainerInherit, ObjectInherit/InheritOnly'
+        self.assertEqual(self.access('268435456', inherit_only, path=('A', 'B')), (True, True))
+
+    @staticmethod
+    def entry(rights):
+        return ntfs_acl.Entry(line=2, path=('A',), protected=False, identity='NEAD\\u1',
+                              rights_text=rights, allow=True, applies_to=ALL)
+
+    def test_write_without_delete_is_read_and_flagged(self):
+        e = self.entry('Write, ReadAndExecute, Synchronize')
+        self.assertEqual((e.reads, e.writes), (True, False))
+        self.assertTrue(e.writes_without_delete)
+        self.assertFalse(self.entry('Modify').writes_without_delete)
+        self.assertFalse(self.entry('ReadAndExecute').writes_without_delete)
+
+    def test_unknown_rights_are_unparsable(self):
+        for rights in ('Bogus', 'Read, Bogus', '', '99999999999', '12ab'):
+            with self.subTest(rights=rights):
+                e = self.entry(rights)
+                self.assertIsNone(e.mask)
+                self.assertEqual((e.reads, e.writes), (False, False))
 
 
 ROSTER = (
