@@ -14,7 +14,8 @@ from django.core.management import CommandError, call_command
 from django.db import IntegrityError
 from django.test import TestCase
 
-from filemanager.models import UserProfile
+from filemanager import permissions
+from filemanager.models import Folder, FolderGrant, UserProfile
 
 User = get_user_model()
 
@@ -161,11 +162,52 @@ class Rerun(LoadTest):
             self.assertIn(line, out)
         self.assertEqual(dict(User.objects.values_list('username', 'password')), self.hashes)
 
-    def test_groups_the_roster_does_not_name_are_left_alone(self):
+    def test_hand_made_groups_the_roster_never_named_are_left_alone(self):
+        # alice has a NUID, so a roster member in a group does not make the group the roster's.
         other = Group.objects.create(name='flux-team')
         User.objects.get(username='alice.a').groups.add(other)
-        self.load(ROSTER)
+        out, error = self.load(ROSTER)
+        self.assertIsNone(error)
         self.assertEqual(self.members('flux-team'), ['alice.a'])
+        self.assertNotIn('flux-team', out)
+
+    def test_a_group_dropped_from_the_roster_loses_its_members(self):
+        roster = HEADER + (
+            '00000001,alice.a,Alice Anders,snr_adapt_all\n'
+            '00000002,bob2,Bob Van Buren,snr_adapt_all\n'
+            '00000003,carol3,Carol Cruz,\n'
+        )
+        out, error = self.load(roster)
+        self.assertIsNone(error)
+        self.assertEqual(self.members('snr_adapt_admin'), [])
+        self.assertIn('alice.a: removed from snr_adapt_admin', out)
+        self.assertIn('snr_adapt_admin is no longer in the roster', out)
+
+    def test_a_dropped_group_takes_its_folder_grants_away_from_former_members(self):
+        sync = User.objects.create_user('sync')
+        root = Folder.objects.create(name='ADAPT', owner=sync, is_third_party=True, third_party_source='adapt')
+        flux = Folder.objects.create(name='Flux', parent=root, owner=sync, is_third_party=True,
+                                     third_party_source='adapt')
+        FolderGrant.objects.create(folder=flux, group=Group.objects.get(name='snr_adapt_admin'), can_write=True)
+        alice = User.objects.get(username='alice.a')
+        self.assertTrue(permissions.can_write(alice, flux))
+        self.load(ROSTER.replace(';snr_adapt_admin', ''))
+        alice = User.objects.get(pk=alice.pk)
+        self.assertFalse(permissions.can_list_files(alice, flux))
+
+    def test_a_dropped_group_stays_empty_on_later_runs(self):
+        roster = ROSTER.replace(';snr_adapt_admin', '')
+        self.load(roster)
+        User.objects.get(username='bob2').groups.add(Group.objects.get(name='snr_adapt_admin'))
+        out, _ = self.load(roster)
+        self.assertEqual(self.members('snr_adapt_admin'), [])
+        self.assertIn('bob2: removed from snr_adapt_admin', out)
+
+    def test_a_dropped_group_keeps_members_whose_row_failed(self):
+        roster = ROSTER.replace(';snr_adapt_admin', '').replace('00000001,alice.a,', '0000001,alice.a,')
+        _, error = self.load(roster)
+        self.assertIsNotNone(error)
+        self.assertEqual(self.members('snr_adapt_admin'), ['alice.a'])
 
     def test_an_existing_account_without_a_nuid_is_linked_not_duplicated(self):
         User.objects.create_user('dave4', password='kept-pw', email='dave@example.org')
@@ -286,3 +328,10 @@ class Admin(LoadTest):
         self.assertContains(self.client.get('/admin/auth/user/'), 'handmade')
         page = self.client.get(f'/admin/auth/user/{User.objects.get(username="bob2").pk}/change/')
         self.assertContains(page, 'value="00000002"')
+
+    def test_the_admin_lists_roster_groups(self):
+        self.load(ROSTER)
+        User.objects.create_superuser('root', password='pw')
+        self.client.login(username='root', password='pw')
+        page = self.client.get('/admin/filemanager/rostergroup/')
+        self.assertContains(page, 'snr_adapt_admin')

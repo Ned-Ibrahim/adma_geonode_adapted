@@ -2,7 +2,7 @@ from django import forms
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
-from .models import Folder, File, Map, MapLayer, Tool, FolderGrant, UserProfile
+from .models import Folder, File, Map, MapLayer, Tool, FolderGrant, RosterGroup, UserProfile
 
 User = get_user_model()
 
@@ -125,6 +125,14 @@ class FolderGrantAdmin(admin.ModelAdmin):
         if not change:
             obj.granted_by = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(RosterGroup)
+class RosterGroupAdmin(admin.ModelAdmin):
+    """Groups adapt_users load keeps in step with the roster. Delete a row to hand a group back to the admins."""
+    list_display = ['group', 'added_at']
+    search_fields = ['group__name']
+    readonly_fields = ['added_at']
 
 
 class UserProfileInline(admin.StackedInline):

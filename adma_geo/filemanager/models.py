@@ -1121,6 +1121,23 @@ class UserProfile(models.Model):
         return f'{self.user.username} ({self.nuid or "no NUID"})'
 
 
+class RosterGroup(models.Model):
+    """Marks a Django group as the ADAPT roster's.
+
+    adapt_users load keeps the members of every marked group exactly as the
+    roster lists them, and marks each group the roster names. The mark stays
+    when a group drops out of the roster, so the loader then empties it instead
+    of leaving its members with the group's folder grants. Groups made by hand
+    carry no mark and the loader never touches them.
+    """
+    group = models.OneToOneField('auth.Group', on_delete=models.CASCADE, primary_key=True,
+                                 related_name='roster')
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.group.name
+
+
 def must_change_password(user):
     """True while the user is held on the change password form."""
     try:

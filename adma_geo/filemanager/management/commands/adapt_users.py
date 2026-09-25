@@ -9,7 +9,9 @@ The roster is a CSV with a header row and four columns:
 nuid is the 8 digit University of Nebraska ID, username the UNL email prefix,
 groups the AD groups the person belongs to, separated by ";". Each AD group
 becomes a Django group of the same name whose members are exactly the people
-the roster lists in it. Groups the roster never names are left alone.
+the roster lists in it. The loader marks these groups (RosterGroup), and a
+marked group the roster stops naming is emptied and reported, so nobody keeps
+its folder grants. Groups the roster never named are left alone.
 
 New accounts get a random one-time password, printed once at the end and
 stored only as a hash. A rerun keeps passwords, applies name, email and group
@@ -34,7 +36,7 @@ from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from filemanager.models import UserProfile
+from filemanager.models import RosterGroup, UserProfile
 
 User = get_user_model()
 
@@ -168,8 +170,8 @@ class Command(BaseCommand):
                     passwords.append((user.username, finish_new_account(user)))
             failures.sort()
             keep = self._users_named_in(failures)
-            self._sync_groups(group_names, loaded, keep, created={u for u, _ in passwords})
-            notices = self._missing(loaded, keep, options['deactivate_missing'])
+            notices = self._sync_groups(group_names, loaded, keep, created={u for u, _ in passwords})
+            notices += self._missing(loaded, keep, options['deactivate_missing'])
             notices += [f'In the roster but inactive: {row.username}. Reactivate in the admin if that is wrong.'
                         for pk, row in loaded.items() if pk in inactive]
             if options['dry_run']:
@@ -241,9 +243,17 @@ class Command(BaseCommand):
             UserProfile.objects.filter(nuid__in=nuids).values_list('user_id', flat=True))
 
     def _sync_groups(self, group_names, loaded, keep, created):
-        """Make each group the roster names hold exactly the loaded users the roster lists in it."""
-        for name in sorted(group_names):
+        """Make each roster group hold exactly the loaded users the roster lists in it.
+
+        Roster groups are the ones this file names plus every group an earlier
+        load marked (RosterGroup). A marked group the file no longer names is
+        emptied, so its former members lose its folder grants. Returns notices.
+        """
+        marked = set(Group.objects.filter(roster__isnull=False).values_list('name', flat=True))
+        notices = []
+        for name in sorted(group_names | marked):
             group, _ = Group.objects.get_or_create(name=name)
+            RosterGroup.objects.get_or_create(group=group)
             wanted = {pk for pk, row in loaded.items() if name in row.groups}
             current = set(group.user_set.values_list('pk', flat=True))
             add, remove = wanted - current, current - wanted - keep
@@ -255,6 +265,11 @@ class Command(BaseCommand):
                 username = loaded[pk].username if pk in loaded else User.objects.get(pk=pk).username
                 if username not in created:
                     self.changes[username].append(f'{verb} {name}')
+            if name not in group_names and remove:
+                notices.append(f'{name} is no longer in the roster: removed {len(remove)} '
+                               f'member{"s" if len(remove) != 1 else ""}. '
+                               'The group and its folder grants stay; delete it in the admin if it is gone for good.')
+        return notices
 
     def _missing(self, loaded, keep, deactivate):
         """Report, and optionally deactivate, accounts with a NUID the roster no longer lists."""
