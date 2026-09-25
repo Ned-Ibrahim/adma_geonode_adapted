@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load folder_counts %}
 
 {% block title %}Search - ADMA{% endblock %}
 
@@ -311,7 +312,7 @@
                     <i class="fas fa-search-plus me-2"></i>Search Results
                 </h4>
                 {% if total_results > 0 %}
-                    <span class="badge bg-secondary">{{ total_results }} results found</span>
+                    <span class="badge bg-secondary">{{ total_results }} result{{ total_results|pluralize }} found</span>
                 {% endif %}
             </div>
             
@@ -367,7 +368,7 @@
                                                 {% elif result.type == 'map' %}
                                                     <small class="text-muted">
                                                         <span class="badge bg-info me-1">GIS</span>
-                                                        {{ result.object.map_layers.count }} layers
+                                                        {% with n=result.object.map_layers.count %}{{ n }} layer{{ n|pluralize }}{% endwith %}
                                                     </small>
                                                 {% endif %}
                                             </div>
@@ -404,9 +405,9 @@
                                             {% if result.type == 'file' %}
                                                 {{ result.object.get_size_display }}
                                             {% elif result.type == 'folder' %}
-                                                {{ result.object.files.count }} files
+                                                {% with counts=result.object|counts_for:user %}{{ counts.files }} file{{ counts.files|pluralize }}{% endwith %}
                                             {% elif result.type == 'map' %}
-                                                {{ result.object.map_layers.count }} layers
+                                                {% with n=result.object.map_layers.count %}{{ n }} layer{{ n|pluralize }}{% endwith %}
                                             {% endif %}
                                         </small>
                                     </td>
@@ -445,9 +446,9 @@
                                                     <span class="badge bg-info ms-1">GIS</span>
                                                 {% endif %}
                                             {% elif result.type == 'folder' %}
-                                                {{ result.object.files.count }} files • {{ result.object.subfolders.count }} folders
+                                                {% with counts=result.object|counts_for:user %}{{ counts.files }} file{{ counts.files|pluralize }} • {{ counts.subfolders }} folder{{ counts.subfolders|pluralize }}{% endwith %}
                                             {% elif result.type == 'map' %}
-                                                {{ result.object.map_layers.count }} layers • Map
+                                                {% with n=result.object.map_layers.count %}{{ n }} layer{{ n|pluralize }}{% endwith %} • Map
                                                 <span class="badge bg-info ms-1">GIS</span>
                                             {% endif %}
                                         </small>
@@ -512,7 +513,7 @@
                     </ul>
                     <div class="text-center mt-2">
                         <small class="text-muted">
-                            Showing {{ page_obj.start_index }} - {{ page_obj.end_index }} of {{ total_results }} results
+                            Showing {{ page_obj.start_index }} - {{ page_obj.end_index }} of {{ total_results }} result{{ total_results|pluralize }}
                         </small>
                     </div>
                 </nav>

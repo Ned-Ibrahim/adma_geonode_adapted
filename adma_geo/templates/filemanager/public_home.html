@@ -170,7 +170,7 @@
                     <h4 class="mb-0 me-3">
                         <i class="fas fa-map me-2"></i>Public Maps
                     </h4>
-                    <span class="badge bg-secondary">{{ stats.total_public_maps }} maps</span>
+                    <span class="badge bg-secondary">{{ stats.total_public_maps }} map{{ stats.total_public_maps|pluralize }}</span>
                 </div>
             </div>
             
@@ -199,7 +199,7 @@
                                         </div>
                                     </div>
                                 </td>
-                                <td><span class="badge bg-info">{{ map.map_layers.count }} layers</span></td>
+                                <td><span class="badge bg-info">{% with n=map.map_layers.count %}{{ n }} layer{{ n|pluralize }}{% endwith %}</span></td>
                                 <td><small>{{ map.owner.username }}</small></td>
                                 <td><small>{{ map.created_at|date:"M d, Y" }}</small></td>
                             </tr>
@@ -223,7 +223,7 @@
                     <h4 class="mb-0 me-3">
                         <i class="fas fa-cloud-download-alt me-2"></i>Third-Party Data
                     </h4>
-                    <span class="badge bg-secondary">{{ stats.total_third_party_folders }} folders, {{ stats.total_third_party_files }} files</span>
+                    <span class="badge bg-secondary">{{ stats.total_third_party_folders }} folder{{ stats.total_third_party_folders|pluralize }}, {{ stats.total_third_party_files }} file{{ stats.total_third_party_files|pluralize }}</span>
                 </div>
                 
                 <!-- View Toggle -->
@@ -339,7 +339,7 @@
                                         </small>
                                         <br>
                                         <small class="text-muted">
-                                            {{ folder.file_count }} files • {{ folder.subfolder_count }} folders
+                                            {{ folder.file_count }} file{{ folder.file_count|pluralize }} • {{ folder.subfolder_count }} folder{{ folder.subfolder_count|pluralize }}
                                         </small>
                                     </div>
                                 </div>
@@ -391,7 +391,7 @@
                     <h4 class="mb-0 me-3">
                         <i class="fas fa-database me-2"></i>Public Data
                     </h4>
-                    <span class="badge bg-secondary">{{ stats.total_public_folders }} folders, {{ stats.total_public_files }} files</span>
+                    <span class="badge bg-secondary">{{ stats.total_public_folders }} folder{{ stats.total_public_folders|pluralize }}, {{ stats.total_public_files }} file{{ stats.total_public_files|pluralize }}</span>
                 </div>
                 
                 <!-- View Toggle -->
@@ -477,7 +477,7 @@
                                     <div class="flex-grow-1">
                                         <h6 class="mb-1 fw-bold">{{ folder.name|truncatechars:25 }}</h6>
                                         <small class="text-muted">
-                                            {{ folder.file_count }} files • {{ folder.subfolder_count }} folders
+                                            {{ folder.file_count }} file{{ folder.file_count|pluralize }} • {{ folder.subfolder_count }} folder{{ folder.subfolder_count|pluralize }}
                                         </small>
                                         <br>
                                         <small class="text-muted">
@@ -556,8 +556,8 @@
                     </ul>
                     <div class="text-center mt-2">
                         <small class="text-muted">
-                            Showing {{ page_obj.start_index }} - {{ page_obj.end_index }} of {{ total_items }} items
-                            ({{ stats.total_public_folders }} folders, {{ stats.total_public_files }} files)
+                            Showing {{ page_obj.start_index }} - {{ page_obj.end_index }} of {{ total_items }} item{{ total_items|pluralize }}
+                            ({{ stats.total_public_folders }} folder{{ stats.total_public_folders|pluralize }}, {{ stats.total_public_files }} file{{ stats.total_public_files|pluralize }})
                         </small>
                     </div>
                 </nav>

@@ -18,7 +18,8 @@ FolderGrant rows that an administrator manages:
 from collections import defaultdict
 from typing import Iterable, List, Optional, Set
 
-from django.db.models import Q
+from django.db.models import Q, Sum
+from django.utils.functional import cached_property
 
 from .models import Folder, FolderGrant
 
@@ -62,6 +63,10 @@ class _Grants:
                 )
             current = self._parents[current]
         return ids
+
+    def parent_of(self, folder_id):
+        chain = self.chain(folder_id)
+        return chain[1] if len(chain) > 1 else None
 
     def covers(self, folder: Optional[Folder], granted: set) -> bool:
         if folder is None or not granted:
@@ -115,6 +120,55 @@ def can_list_files(user, folder) -> bool:
         return True
     grants = _grants(user)
     return grants.covers(folder, grants.read)
+
+
+class FolderCounts:
+    """What `user` may count inside `folder`: `subfolders` and `files` directly in it, `total_files` anywhere below.
+
+    A folder the user may list in full reports its own counts. A folder that is
+    open only on the way to a grant reports just the branches leading to the
+    user's grants and, for `total_files`, the cached totals of the topmost
+    granted folders beneath it. That reuses the grants already loaded for the
+    request, so it costs at most one query however large the tree is.
+    """
+
+    def __init__(self, user, folder):
+        self._folder = folder
+        self._full = not _is_adapt(folder) or can_list_files(user, folder)
+        self._grants = _grants(user) if not self._full and _signed_in(user) else None
+
+    @cached_property
+    def subfolders(self) -> int:
+        if self._full:
+            return self._folder.subfolder_count
+        grants = self._grants
+        if grants is None:
+            return 0
+        return sum(1 for pk in grants.read | grants.on_path if grants.parent_of(pk) == self._folder.pk)
+
+    @cached_property
+    def files(self) -> int:
+        return self._folder.file_count if self._full else 0
+
+    @cached_property
+    def total_files(self) -> int:
+        if self._full:
+            return self._folder.total_file_count
+        grants = self._grants
+        if grants is None:
+            return 0
+        topmost = [
+            pk for pk in grants.read
+            if self._folder.pk in grants.chain(pk)[1:] and not grants.read.intersection(grants.chain(pk)[1:])
+        ]
+        if not topmost:
+            return 0
+        return Folder.objects.filter(pk__in=topmost).aggregate(n=Sum('cached_total_file_count'))['n'] or 0
+
+    @property
+    def summary(self) -> str:
+        """For example "3 folders, 81 files", or "Empty"."""
+        return Folder.describe_contents(self.subfolders, self.total_files)
 
 
 def filter_readable(user, objects: Iterable) -> List:

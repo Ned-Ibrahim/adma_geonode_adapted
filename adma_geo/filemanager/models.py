@@ -179,16 +179,19 @@ class Folder(models.Model):
     
     @property
     def content_summary(self):
-        """Get a summary of folder contents for display (e.g., '3 folders, 81 files')"""
-        subfolder_count = self.subfolder_count
-        total_files = self.total_file_count
-        
+        """Get a summary of folder contents for display (e.g., '3 folders, 81 files').
+        Counts everything; for an ADAPT folder shown to a user, use
+        permissions.FolderCounts, which counts only what that user may see."""
+        return self.describe_contents(self.subfolder_count, self.total_file_count)
+
+    @staticmethod
+    def describe_contents(subfolder_count, total_files):
         parts = []
         if subfolder_count > 0:
             parts.append(f"{subfolder_count} folder{'s' if subfolder_count != 1 else ''}")
         if total_files > 0:
             parts.append(f"{total_files} file{'s' if total_files != 1 else ''}")
-        
+
         if not parts:
             return "Empty"
         return ", ".join(parts)

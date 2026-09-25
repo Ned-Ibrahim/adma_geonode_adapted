@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load folder_counts %}
 
 {% block title %}Dashboard - ADMA{% endblock %}
 
@@ -187,7 +188,7 @@
                                     </div>
                                 </td>
                                 <td><span class="text-muted">Folder</span></td>
-                                <td><span class="text-muted">{{ folder.file_count }} files</span></td>
+                                <td><span class="text-muted">{{ folder.file_count }} file{{ folder.file_count|pluralize }}</span></td>
                                 <td>
                                     <small>{{ folder.owner.username }}</small>
                                     {% if folder.owner == user %}
@@ -283,7 +284,7 @@
                                         <div class="flex-grow-1">
                                             <h6 class="mb-1 fw-bold">{{ folder.name }}</h6>
                                             <small class="text-muted">
-                                                {{ folder.file_count }} files • {{ folder.subfolder_count }} folders
+                                                {{ folder.file_count }} file{{ folder.file_count|pluralize }} • {{ folder.subfolder_count }} folder{{ folder.subfolder_count|pluralize }}
                                             </small>
                                             <br>
                                             <small class="text-muted">
@@ -394,7 +395,7 @@
                 {% if page_obj and page_obj.num_pages > 1 %}
                 <div class="d-flex justify-content-between align-items-center mt-4">
                     <div class="text-muted">
-                        Showing {{ page_obj.start_index }}-{{ page_obj.end_index }} of {{ total_items }} items
+                        Showing {{ page_obj.start_index }}-{{ page_obj.end_index }} of {{ total_items }} item{{ total_items|pluralize }}
                     </div>
                     <nav aria-label="File pagination">
                         <ul class="pagination mb-0">
@@ -446,7 +447,7 @@
                     <h5 class="mb-0 me-3">
                         <i class="fas fa-map me-2"></i>Maps
                     </h5>
-                    <span class="badge bg-secondary">{{ all_maps|length }} maps</span>
+                    <span class="badge bg-secondary">{{ all_maps|length }} map{{ all_maps|length|pluralize }}</span>
                 </div>
                 <div class="btn-group" role="group" aria-label="Maps view toggle">
                     <button type="button" class="btn btn-sm btn-outline-secondary active" id="mapsListViewBtn" onclick="toggleSectionView('maps', 'list')">
@@ -487,7 +488,7 @@
                                             </div>
                                         </div>
                                     </td>
-                                    <td><span class="badge bg-info">{{ map.map_layers.count }} layers</span></td>
+                                    <td><span class="badge bg-info">{% with n=map.map_layers.count %}{{ n }} layer{{ n|pluralize }}{% endwith %}</span></td>
                                     <td>
                                         <small>{{ map.owner.username }}</small>
                                         {% if map.owner == user %}
@@ -545,7 +546,7 @@
                                             <p class="card-text text-muted small mb-2">{{ map.description|truncatechars:60 }}</p>
                                             {% endif %}
                                             <div class="d-flex flex-wrap gap-1 mb-2">
-                                                <span class="badge bg-info">{{ map.map_layers.count }} layers</span>
+                                                <span class="badge bg-info">{% with n=map.map_layers.count %}{{ n }} layer{{ n|pluralize }}{% endwith %}</span>
                                                 {% if map.is_public %}
                                                 <span class="badge bg-success">Public</span>
                                                 {% else %}
@@ -601,7 +602,7 @@
                     <h5 class="mb-0 me-3">
                         <i class="fas fa-cloud me-2"></i>Third-Party Data
                     </h5>
-                    <span class="badge bg-secondary">{{ total_third_party_folders }} folders, {{ total_third_party_files }} files</span>
+                    <span class="badge bg-secondary">{{ total_third_party_folders }} folder{{ total_third_party_folders|pluralize }}, {{ total_third_party_files }} file{{ total_third_party_files|pluralize }}</span>
                 </div>
                 <div class="btn-group" role="group" aria-label="Third-party data view toggle">
                     <button type="button" class="btn btn-sm btn-outline-secondary active" id="thirdPartyListViewBtn" onclick="toggleSectionView('thirdParty', 'list')">
@@ -644,7 +645,7 @@
                                         </div>
                                     </td>
                                     <td><span class="text-muted">Folder</span></td>
-                                    <td><span class="text-muted">{{ folder.content_summary }}</span></td>
+                                    <td><span class="text-muted">{% with counts=folder|counts_for:user %}{{ counts.summary }}{% endwith %}</span></td>
                                     <td>
                                         <span class="badge bg-purple" style="background-color: #6f42c1;">
                                             <i class="fas fa-cloud me-1"></i>{{ folder.third_party_source|default:"External" }}
@@ -743,7 +744,7 @@
                                         <div class="flex-grow-1">
                                             <h6 class="mb-1 fw-bold">{{ folder.name }}</h6>
                                             <small class="text-muted">
-                                                {{ folder.content_summary }}
+                                                {% with counts=folder|counts_for:user %}{{ counts.summary }}{% endwith %}
                                             </small>
                                             <br>
                                             <small>
@@ -1387,7 +1388,7 @@ function renderSimpleFolderTree(structure, container) {
             <div class="d-flex align-items-center">
                 <i class="fas fa-folder text-warning me-2"></i>
                 <strong>${folderName}</strong>
-                <span class="badge bg-secondary ms-2">${structure[folderName].files.length} files</span>
+                <span class="badge bg-secondary ms-2">${structure[folderName].files.length} file${structure[folderName].files.length === 1 ? '' : 's'}</span>
             </div>
         `;
         container.appendChild(folderDiv);
@@ -1451,7 +1452,7 @@ document.getElementById('uploadFoldersForm').addEventListener('submit', async fu
             const data = await response.json();
             
             if (data.success) {
-                alert(`Success! Uploaded ${data.files_created} files in ${data.folders_created} folders.`);
+                alert(`Success! Uploaded ${data.files_created} file${data.files_created === 1 ? '' : 's'} in ${data.folders_created} folder${data.folders_created === 1 ? '' : 's'}.`);
                 location.reload(); // Reload to show new folders and files
             } else {
                 alert(data.error || 'Error uploading folders');
