@@ -65,13 +65,14 @@ GENERIC_RIGHTS = {
 #
 # write: read, plus WriteData and AppendData (create and change files and
 # folders), plus Delete or DeleteSubdirectoriesAndFiles. That is what Modify and
-# FullControl hold, and an ADMA write grant also lets a user delete. Write
-# without a delete right (for example "Write, ReadAndExecute") therefore stays
-# read: ADMA has no level that creates and changes but never deletes, and
-# giving less than snr18 is the safe side. import lists those entries.
+# FullControl hold, and an ADMA write grant does not tell changing apart from
+# deleting. Write without a delete right (for example "Write, ReadAndExecute")
+# therefore stays read: ADMA has no level that creates and changes but never
+# deletes, and giving less than snr18 is the safe side. import lists those entries.
 READ_BITS = 0x1
 WRITE_BITS = 0x2 | 0x4
 DELETE_BITS = 0x10000 | 0x40
+
 # Built-in groups that on a domain server hold every signed-in domain account.
 EVERY_DOMAIN_USER = frozenset({'builtin\\users', 'everyone', 'nt authority\\authenticated users'})
 
