@@ -207,7 +207,11 @@ def remove_folder_directory(sender, instance, **kwargs):
     Folder deletion is asynchronous and files are removed first, so by the time
     this runs the directory is normally empty. If anything remains, leave it
     alone rather than risk deleting data the database no longer tracks.
+    Third-party folders (ADAPT) are catalogued by reference and never had a
+    media directory, so there is nothing to remove.
     """
+    if instance.is_third_party:
+        return
     try:
         folder_dir = _folder_dir(instance.get_full_path())
         if not os.path.isdir(folder_dir):

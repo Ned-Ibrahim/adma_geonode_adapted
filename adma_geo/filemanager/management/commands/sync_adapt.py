@@ -57,6 +57,7 @@ NAME_MAX = File._meta.get_field('name').max_length
 ID_MAX = File._meta.get_field('third_party_id').max_length
 URL_MAX = File._meta.get_field('third_party_url').max_length
 BATCH = 1000
+PROGRESS_EVERY = 50000
 
 
 def guess_file_type(filename):
@@ -176,6 +177,9 @@ class Command(BaseCommand):
             is_third_party=True, third_party_source='adapt',
         ).only('id', 'name', 'parent_id', 'third_party_id'):
             self.existing_folders[(fo.parent_id, fo.name)] = fo
+        # Snapshot the ids before the walk adds new rows: prune removes what is here but not seen.
+        existing_file_ids = {f.id for f in existing_files.values()}
+        existing_folder_ids = {fo.id for fo in self.existing_folders.values()}
 
         seen_file_ids = set()
         seen_folder_ids = {start_folder.id}
@@ -229,6 +233,12 @@ class Command(BaseCommand):
                     stats['excluded_files'] += 1
                     continue
                 stats['files_seen'] += 1
+                if stats['files_seen'] % PROGRESS_EVERY == 0:
+                    # The walk can take an hour; without this it looks hung.
+                    self.stdout.write(
+                        f"  ... walked {stats['files_seen']:,} files "
+                        f"({stats['files_created']:,} new, {stats['files_updated']:,} changed)")
+                    self.stdout.flush()
 
                 if len(fname) > NAME_MAX or len(abs_file) > URL_MAX:
                     stats['errors'] += 1
@@ -293,11 +303,12 @@ class Command(BaseCommand):
         # ----------------------------------------------------------- prune
 
         if self.prune:
+            self.stdout.write(f"  Walk done: {stats['files_seen']:,} files. Pruning...")
             if stats['files_seen'] == 0 and stats['folders_seen'] == 0:
                 self.stderr.write(self.style.ERROR(
                     'Walk found nothing. Refusing to prune: this looks like a dropped mount, not an empty share.'))
             else:
-                self._prune(subtree_folder_ids, seen_file_ids, seen_folder_ids, start_folder)
+                self._prune(existing_file_ids, seen_file_ids, existing_folder_ids, seen_folder_ids, start_folder)
 
         # ---------------------------------------------------------- report
 
@@ -408,34 +419,39 @@ class Command(BaseCommand):
             File.objects.bulk_update(rows, ['file_size', 'third_party_id', 'third_party_url'], batch_size=BATCH)
         rows.clear()
 
-    def _prune(self, subtree_folder_ids, seen_file_ids, seen_folder_ids, start_folder):
-        stale_files = File.objects.filter(
-            folder_id__in=subtree_folder_ids, owner=self.owner,
-            is_third_party=True, third_party_source='adapt',
-        ).exclude(id__in=seen_file_ids)
-        stale_folders = Folder.objects.filter(
-            id__in=subtree_folder_ids, owner=self.owner,
-            is_third_party=True, third_party_source='adapt',
-        ).exclude(id__in=seen_folder_ids).exclude(id=start_folder.id)
+    @staticmethod
+    def _chunks(ids):
+        for i in range(0, len(ids), BATCH):
+            yield ids[i:i + BATCH]
 
-        n_files = stale_files.count()
-        n_folders = stale_folders.count()
+    def _prune(self, existing_file_ids, seen_file_ids, existing_folder_ids, seen_folder_ids, start_folder):
+        # Work out the stale ids in Python. A single query that excludes every seen id
+        # sends one huge array to Postgres and compares each row against all of it:
+        # slow, and at a million rows the parallel scan outgrows Docker's 64 MB /dev/shm.
+        stale_file_ids = sorted(existing_file_ids - seen_file_ids)
+        stale_folder_ids = sorted(existing_folder_ids - seen_folder_ids - {start_folder.id})
+
+        n_files = len(stale_file_ids)
+        n_folders = len(stale_folder_ids)
         self.stats['pruned_files'] = n_files
         self.stats['pruned_folders'] = n_folders
         if self.verbosity >= 2:
-            for f in stale_files.only('third_party_id')[:200]:
+            for f in File.objects.filter(id__in=stale_file_ids[:200]).only('third_party_id'):
                 self.stdout.write(f'  x file: {f.third_party_id}')
-            for fo in stale_folders.only('third_party_id')[:200]:
+            for fo in Folder.objects.filter(id__in=stale_folder_ids[:200]).only('third_party_id'):
                 self.stdout.write(f'  x folder: {fo.third_party_id}')
         if not self.write or (n_files == 0 and n_folders == 0):
             return
 
         with transaction.atomic():
-            # Rows that were published to GeoServer must go through File.delete() so the
-            # layer is removed too. Everything else is a plain DB row: bulk delete.
-            for f in stale_files.filter(is_spatial=True).exclude(geoserver_layer_name__isnull=True).exclude(geoserver_layer_name=''):
-                f.delete()
-            stale_files.delete()
-            # Deepest first so a parent CASCADE never races a child we still hold an id for.
-            stale_folders.delete()
+            for chunk in self._chunks(stale_file_ids):
+                stale_files = File.objects.filter(id__in=chunk)
+                # Rows that were published to GeoServer must go through File.delete() so the
+                # layer is removed too. Everything else is a plain DB row: bulk delete.
+                for f in stale_files.filter(is_spatial=True).exclude(geoserver_layer_name__isnull=True).exclude(geoserver_layer_name=''):
+                    f.delete()
+                stale_files.delete()
+            # Files are gone by now, so deleting a folder only cascades to stale subfolders.
+            for chunk in self._chunks(stale_folder_ids):
+                Folder.objects.filter(id__in=chunk).delete()
         self.stdout.write(f'  Pruned {n_files} files and {n_folders} folders.')
