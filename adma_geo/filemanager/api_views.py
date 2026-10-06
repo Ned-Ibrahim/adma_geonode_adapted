@@ -27,7 +27,7 @@ from .serializers import (
     FileUploadSerializer, FolderUploadSerializer, FileDownloadSerializer,
     FolderDownloadSerializer, TokenCreateSerializer, FileSerializer, FolderSerializer
 )
-from .views import UploadRefused, generate_unique_name, upload_target, validate_adapt_paths
+from .views import UploadRefused, adapt_file_json, adapt_folder_json, generate_unique_name, upload_target
 from .tasks import process_gis_file_task
 
 
@@ -97,6 +97,17 @@ def create_token(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _adapt_file_json(upload):
+    """How the API reports a file written to the ADAPT share: the web views' keys plus the API's own.
+
+    Only a file with a record (a GIS file) has a download_url here.
+    """
+    entry = adapt_file_json(upload)
+    entry['is_public'] = False
+    entry['download_url'] = f'/api/v1/files/{upload.record.id}/download/' if upload.record else None
+    return entry
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def api_upload_files(request):
@@ -110,6 +121,7 @@ def api_upload_files(request):
     Form data:
     - files: List of files to upload
     - folder_id: Optional UUID of target folder
+    - adapt_path: Optional folder on the ADAPT share to upload into, instead of folder_id
     - is_public: Boolean (default: false)
     
     Returns:
@@ -136,38 +148,40 @@ def api_upload_files(request):
     is_public = serializer.validated_data.get('is_public', False)
     
     try:
-        folder = upload_target(request.user, folder_id)
+        folder, adapt_folder = upload_target(request.user, folder_id, serializer.validated_data.get('adapt_path'))
     except UploadRefused as refused:
         message = 'Folder not found or access denied' if refused.status == 404 else str(refused)
         return Response({'error': message}, status=refused.status)
-    to_adapt = adapt_storage.is_adapt_folder(folder)
+    to_adapt = adapt_folder is not None
     
     uploaded_files = []
     
     try:
         # A rollback cannot unwrite the share, so ADAPT uploads are not wrapped in
-        # a transaction: each file that reaches the share keeps its row.
+        # a transaction: a GIS file that reaches the share keeps its record.
         with nullcontext() if to_adapt else transaction.atomic():
             for uploaded_file in files:
                 if to_adapt:
-                    file_obj = adapt_storage.create_reference_upload(folder, uploaded_file, owner=request.user)
-                else:
-                    # Generate unique filename if duplicate exists
-                    unique_filename = generate_unique_name(
-                        uploaded_file.name,
-                        request.user,
-                        folder=folder,
-                        is_folder=False
-                    )
+                    upload = adapt_storage.upload_file(adapt_folder, uploaded_file, owner=request.user)
+                    uploaded_files.append(_adapt_file_json(upload))
+                    continue
 
-                    # Create file object
-                    file_obj = File.objects.create(
-                        name=unique_filename,
-                        file=uploaded_file,
-                        folder=folder,
-                        owner=request.user,
-                        is_public=is_public
-                    )
+                # Generate unique filename if duplicate exists
+                unique_filename = generate_unique_name(
+                    uploaded_file.name,
+                    request.user,
+                    folder=folder,
+                    is_folder=False
+                )
+
+                # Create file object
+                file_obj = File.objects.create(
+                    name=unique_filename,
+                    file=uploaded_file,
+                    folder=folder,
+                    owner=request.user,
+                    is_public=is_public
+                )
                 
                 # Trigger GIS processing for spatial files
                 if file_obj.is_spatial:
@@ -214,6 +228,7 @@ def api_upload_folders(request):
     - files: List of files with folder paths
     - file_paths: List of corresponding folder paths
     - folder_id: Optional UUID of parent folder
+    - adapt_path: Optional folder on the ADAPT share to upload into, instead of folder_id
     - is_public: Boolean (default: false)
     
     Returns:
@@ -240,16 +255,27 @@ def api_upload_folders(request):
         )
     
     try:
-        parent_folder = upload_target(request.user, folder_id)
+        parent_folder, adapt_parent = upload_target(request.user, folder_id, serializer.validated_data.get('adapt_path'))
     except UploadRefused as refused:
         message = 'Parent folder not found or access denied' if refused.status == 404 else str(refused)
         return Response({'error': message}, status=refused.status)
-    to_adapt = adapt_storage.is_adapt_folder(parent_folder)
     
     try:
-        if to_adapt:
-            validate_adapt_paths(file_paths)
-        with nullcontext() if to_adapt else transaction.atomic():
+        if adapt_parent is not None:
+            # Merged into the folders already on the share. Nothing is recorded
+            # in ADMA except GIS files (see adapt_storage.upload_file).
+            tree = adapt_storage.upload_tree(adapt_parent, zip(files, file_paths), request.user)
+            return Response({
+                'success': True,
+                'folders_created': len(tree.folders),
+                'files_uploaded': len(tree.files),
+                'folders': [adapt_folder_json(rel) for rel in tree.folders],
+                'files': [_adapt_file_json(upload) for upload in tree.files],
+                'skipped': tree.skipped,
+                'message': f'Successfully uploaded folder structure: {len(tree.folders)} folders, {len(tree.files)} files'
+            }, status=status.HTTP_201_CREATED)
+
+        with transaction.atomic():
             # Use the same logic as the original upload_folders view
             # This is a simplified version - you can expand it based on your needs
             folders_created = 0
@@ -266,12 +292,7 @@ def api_upload_folders(request):
                 for i, folder_name in enumerate(path_parts[:-1]):  # Exclude filename
                     folder_path = '/'.join(path_parts[:i+1])
                     
-                    if folder_path not in folder_cache and to_adapt:
-                        # Merge into the directory on the share, making it if needed.
-                        folder_cache[folder_path], created = adapt_storage.child_folder(
-                            current_folder, folder_name, owner=request.user)
-                        folders_created += int(created)
-                    elif folder_path not in folder_cache:
+                    if folder_path not in folder_cache:
                         # Check if folder exists
                         try:
                             existing_folder = Folder.objects.get(
@@ -301,24 +322,20 @@ def api_upload_folders(request):
                 
                 # Upload file to the final folder
                 filename = path_parts[-1]
-                if to_adapt:
-                    file_obj = adapt_storage.create_reference_upload(
-                        current_folder, uploaded_file, owner=request.user, preferred_name=filename)
-                else:
-                    unique_filename = generate_unique_name(
-                        filename,
-                        request.user,
-                        folder=current_folder,
-                        is_folder=False
-                    )
+                unique_filename = generate_unique_name(
+                    filename,
+                    request.user,
+                    folder=current_folder,
+                    is_folder=False
+                )
 
-                    file_obj = File.objects.create(
-                        name=unique_filename,
-                        file=uploaded_file,
-                        folder=current_folder,
-                        owner=request.user,
-                        is_public=is_public
-                    )
+                file_obj = File.objects.create(
+                    name=unique_filename,
+                    file=uploaded_file,
+                    folder=current_folder,
+                    owner=request.user,
+                    is_public=is_public
+                )
                 
                 # Trigger GIS processing for spatial files
                 if file_obj.is_spatial:
