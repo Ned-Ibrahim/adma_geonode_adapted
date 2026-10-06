@@ -3,9 +3,6 @@
 A temporary directory stands in for the mount. Everything goes through the
 Django test client, the way a browser or an API client reaches it, and then
 checks the two places that matter: the file on the share and the row in ADMA.
-
-The tests that matter most are in SyncAfterWrite: an upload has to survive the
-next sync_adapt run untouched, neither duplicated nor pruned.
 """
 import io
 import json
@@ -61,9 +58,14 @@ class WriteBackCase(TestCase):
         settings_patch.enable()
         self.addCleanup(settings_patch.disable)
 
-        self.sync()
-        self.soils = Folder.objects.get(name='Soils', parent=self.root)
-        self.flux = Folder.objects.get(name='Flux', parent=self.root)
+        # The rows the old full share sync made for this tree.
+        adapt = dict(owner=self.sync_user, is_third_party=True, third_party_source='adapt')
+        self.soils = Folder.objects.create(name='Soils', parent=self.root, third_party_id='Soils', **adapt)
+        self.flux = Folder.objects.create(name='Flux', parent=self.root, third_party_id='Flux', **adapt)
+        for folder, rel in ((self.soils, 'Soils/cores.csv'), (self.flux, 'Flux/tower.csv')):
+            File.objects.create(name=os.path.basename(rel), folder=folder, third_party_id=rel,
+                                third_party_url=self.on_share(rel),
+                                file_size=os.path.getsize(self.on_share(rel)), **adapt)
         FolderGrant.objects.create(path=self.soils.third_party_id, user=self.reader)
         FolderGrant.objects.create(path=self.soils.third_party_id, user=self.writer, can_write=True)
         flux_team = Group.objects.create(name='flux-team')
@@ -84,11 +86,6 @@ class WriteBackCase(TestCase):
     def read_share(self, rel):
         with open(self.on_share(rel), 'rb') as fh:
             return fh.read()
-
-    def sync(self, *extra):
-        out = io.StringIO()
-        call_command('sync_adapt', '--once', '--no-recompute', *extra, stdout=out, stderr=out)
-        return out.getvalue()
 
     def upload(self, user, folder, name='field.csv', content=b'x,y\n3,4\n'):
         self.client.force_login(user)
@@ -192,8 +189,8 @@ class UploadGate(WriteBackCase):
 
     def test_a_write_grant_covers_subfolders_too(self):
         os.makedirs(self.on_share('Soils/2024'))
-        self.sync()
-        sub = Folder.objects.get(name='2024', parent=self.soils)
+        sub = Folder.objects.create(name='2024', parent=self.soils, owner=self.sync_user, is_third_party=True,
+                                    third_party_source='adapt', third_party_id='Soils/2024')
         response = self.upload(self.writer, sub, 'deep.csv')
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(os.path.exists(self.on_share('Soils/2024/deep.csv')))
@@ -449,32 +446,6 @@ class DeleteAndRename(WriteBackCase):
         row.refresh_from_db()
         self.assertEqual(row.name, 'field.csv')
         self.assertTrue(os.path.exists(self.on_share('Soils/field.csv')))
-
-
-class SyncAfterWrite(WriteBackCase):
-    """sync_adapt matches rows by path whoever owns them, so an upload survives it."""
-
-    def test_sync_with_prune_neither_duplicates_nor_prunes_an_upload(self):
-        self.upload(self.writer, self.soils, 'field.csv')
-        self.create_folder(self.writer, self.soils, 'Uploads')
-        self.upload(self.writer, Folder.objects.get(name='Uploads'), 'inner.csv')
-        rows_before = set(File.objects.values_list('id', flat=True))
-        folders_before = set(Folder.objects.values_list('id', flat=True))
-
-        out = self.sync('--prune')
-
-        self.assertIn('Pruned files:     0', out)
-        self.assertIn('Pruned folders:   0', out)
-        self.assertEqual(set(File.objects.values_list('id', flat=True)), rows_before)
-        self.assertEqual(set(Folder.objects.values_list('id', flat=True)), folders_before)
-        self.assertEqual(File.objects.get(name='field.csv').owner, self.writer)
-        self.assertEqual(Folder.objects.get(name='Uploads').owner, self.writer)
-
-    def test_an_upload_deleted_from_the_share_is_pruned(self):
-        self.upload(self.writer, self.soils, 'field.csv')
-        os.unlink(self.on_share('Soils/field.csv'))
-        self.sync('--prune')
-        self.assertFalse(File.objects.filter(name='field.csv').exists())
 
 
 class UploadControls(WriteBackCase):

@@ -3,7 +3,7 @@
 ADAPT is an SMB share mounted at ``settings.ADAPT_MOUNT``. ADMA indexes it by
 reference: a :class:`~filemanager.models.File` row carries the path on the mount
 in ``third_party_url`` and streams the bytes live, instead of copying them into
-``MEDIA_ROOT``. ``sync_adapt`` creates those rows by walking the share.
+``MEDIA_ROOT``. Only files in use get a row; browsing reads the share itself.
 
 This module is the only place in ADMA that writes to the share, and it holds
 three rules so that the rest of the code does not have to:
@@ -14,9 +14,9 @@ three rules so that the rest of the code does not have to:
 2.  A write never overwrites. Names are reserved with ``O_EXCL``, which the
     server applies atomically, so two simultaneous uploads and a file dropped on
     the share out of band all lose the race instead of clobbering each other.
-3.  Rows are written in exactly the shape ``sync_adapt`` produces, so the next
-    sync recognises an upload as an existing file rather than re-importing it or
-    pruning it away.
+3.  Rows are keyed by their path on the share (``third_party_id``), the same
+    way as every other ADAPT row, so an upload and a later open of the same file
+    find one row rather than two.
 
 Who may write where is not decided here: callers check
 ``permissions.can_write`` first (see ``views.upload_target``).
@@ -82,16 +82,16 @@ def is_adapt_folder(folder):
 
 
 def rel_to_mount(abs_path):
-    """Path relative to the mount, forward slashes. The identity sync_adapt uses."""
+    """Path relative to the mount, forward slashes. The identity ADAPT rows are keyed by."""
     return os.path.relpath(abs_path, mount_root()).replace(os.sep, '/')
 
 
 def reference_url(abs_path):
-    """The path sync_adapt records in third_party_url for this file.
+    """The path recorded in third_party_url for this file.
 
-    sync_adapt joins names onto the mount as configured, without resolving
-    symlinks, so the same is done here; otherwise a symlinked mount would make
-    the next sync rewrite every uploaded row's path.
+    Names are joined onto the mount as configured, without resolving symlinks,
+    as for every other ADAPT row; otherwise a symlinked mount would give the
+    same file two different recorded paths.
     """
     configured = os.path.abspath(getattr(settings, 'ADAPT_MOUNT', '/adapt'))
     return os.path.join(configured, *rel_to_mount(abs_path).split('/'))
@@ -125,13 +125,13 @@ def folder_share_path(folder):
         # share root, quietly landing uploads at the top of the warehouse.
         raise AdaptWriteError(
             f'Folder "{folder}" has no recorded path on the ADAPT share. '
-            f'Run sync_adapt to repair it.'
+            f'Set its path (third_party_id) in the admin.'
         )
 
     rel = rel.replace('\\', '/')
     if rel.startswith('/') or os.path.isabs(rel) or (len(rel) > 1 and rel[1] == ':'):
         # Recorded paths are relative to the mount. An absolute one was not
-        # written by sync_adapt and is not trusted.
+        # written by ADMA and is not trusted.
         raise AdaptWriteError(f'Refusing to touch "{rel}": not a path relative to the ADAPT mount')
     rel = rel.strip('/')
     candidate = os.path.realpath(os.path.join(root, rel))
@@ -148,7 +148,7 @@ def _assert_mounted(root):
     When the CIFS mount is missing, /adapt is an ordinary empty directory inside
     the container. Writing there succeeds and then vanishes with the container,
     which looks exactly like silent data loss. An empty share is indistinguishable
-    from a dropped mount, so both are refused. sync_adapt refuses on the same test.
+    from a dropped mount, so both are refused. index_adapt refuses on the same test.
     """
     if not os.path.isdir(root):
         raise AdaptWriteError(f'ADAPT mount {root} does not exist')
@@ -294,9 +294,9 @@ def write_upload(folder, uploaded_file, preferred_name, taken=()):
 def create_reference_upload(folder, uploaded_file, owner, preferred_name=None):
     """Write an upload onto the share and record it as an ADAPT reference.
 
-    The resulting row is shaped exactly like one sync_adapt would create, except
-    that it is owned by the uploading user rather than by the sync account, so
-    that the upload is attributable. Like every ADAPT row it is not public:
+    The resulting row is keyed by its path like every other ADAPT row, except
+    that it is owned by the uploading user rather than by the ADAPT root's owner,
+    so that the upload is attributable. Like every ADAPT row it is not public:
     FolderGrants decide who sees it.
     """
     from .models import File
@@ -346,8 +346,8 @@ def create_reference_upload(folder, uploaded_file, owner, preferred_name=None):
 def _add_to_cached_totals(folder, size):
     """Count a new file in the cached totals of its folder and every folder above it.
 
-    ADAPT folders show totals that sync_adapt precomputes (Folder.uses_cached_totals),
-    so without this an upload would not show in them until the next sync.
+    ADAPT folders show precomputed totals (Folder.uses_cached_totals), so
+    without this an upload would not show in them.
     """
     from django.db.models import F
 
