@@ -18,11 +18,16 @@ from contextlib import nullcontext
 import zipfile
 import io
 import os
+import stat
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+from django.core.paginator import Paginator
+from django.urls import reverse
 from django.utils.text import slugify
 
 from .middleware import PASSWORD_CHANGE_MESSAGE
 from .models import File, Folder, must_change_password
-from . import adapt_storage, permissions
+from . import adapt_share, adapt_storage, adapt_views, permissions
 from .serializers import (
     FileUploadSerializer, FolderUploadSerializer, FileDownloadSerializer,
     FolderDownloadSerializer, TokenCreateSerializer, FileSerializer, FolderSerializer
@@ -746,3 +751,175 @@ def _format_file_size(size_bytes):
         i += 1
     
     return f"{size_bytes:.1f} {size_names[i]}"
+
+
+# --------------------------------------------------------- ADAPT share by path
+#
+# The share is read live from the mount and addressed by path, as on the
+# /adapt/ pages: same grants, same refusals, and no database rows.
+
+ADAPT_PAGE_SIZE = 100
+ADAPT_MAX_PAGE_SIZE = 1000
+ADAPT_FOLDER_NOT_FOUND = 'Folder not found'
+ADAPT_FILE_NOT_FOUND = 'File not found'
+
+
+def _whole_number(request, name, default):
+    """Query parameter `name` as an integer of at least 1, `default` when absent, None when it is not one."""
+    raw = request.query_params.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 1 else None
+
+
+def _bad_request(message, **extra):
+    return Response({'error': message, **extra}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _may_download(user, rel):
+    """Whether `user` may fetch file `rel`: granted, and not a name ADMA hides."""
+    return (permissions.can_read_path(user, rel, is_dir=False)
+            and not adapt_share.is_hidden(adapt_share.name(rel), is_dir=False))
+
+
+def _adapt_entry(entry, rel, folder_path):
+    """One listed entry as the API returns it; files are stat'ed for size and modified time."""
+    item = {'name': entry.name, 'path': adapt_share.join(rel, entry.name), 'is_dir': entry.is_dir}
+    if not entry.is_dir:
+        info = adapt_views._stat(os.path.join(folder_path, entry.name))
+        item['size'] = info.st_size if info else None
+        item['modified'] = datetime.fromtimestamp(info.st_mtime, timezone.utc) if info else None
+    return item
+
+
+def _open_regular_file(path):
+    """The regular file at `path` open for reading, or None.
+
+    A link in the last place is refused (O_NOFOLLOW), and a pipe or device
+    found there, even one swapped in since the path was checked, is neither
+    waited on (O_NONBLOCK) nor served.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            return os.fdopen(fd, 'rb')
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_adapt_list(request):
+    """
+    List one folder of the ADAPT share by path, as its /adapt/ page shows it.
+
+    GET /api/v1/adapt/?path=Soils/2024&page=1&page_size=100
+    Authorization: Token your_api_token
+
+    Query parameters:
+    - path: the folder on the share; empty or absent for the top. Slashes or backslashes.
+    - page: page number, from 1 (default 1)
+    - page_size: entries per page (default 100; larger than 1000 counts as 1000)
+
+    Folders come first, then files, each by name without case. A folder the
+    user may open only on the way to a grant lists just the branches leading
+    there, and no files. Only the files on the requested page are read for
+    size and modified time.
+
+    Returns:
+    {
+        "path": "Soils",
+        "entries": [
+            {"name": "2024", "path": "Soils/2024", "is_dir": true},
+            {"name": "cores.csv", "path": "Soils/cores.csv", "is_dir": false,
+             "size": 8, "modified": "2023-11-14T22:13:20Z"}
+        ],
+        "count": 2,
+        "page": 1,
+        "page_size": 100,
+        "page_count": 1
+    }
+
+    404 for any path the user may not see, whether or not it exists. 400 for
+    a file path (with the file's download_url), or for a page or page_size
+    that is not a whole number in range.
+    """
+    user = request.user
+    not_found = Response({'error': ADAPT_FOLDER_NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
+    try:
+        rel = adapt_share.normalize(request.query_params.get('path', ''))
+        path = adapt_share.resolve(rel)
+    except adapt_share.AdaptPathError:
+        return not_found
+    if rel and os.path.isfile(path):
+        if not _may_download(user, rel):
+            return not_found
+        download_url = f"{reverse('api:adapt_download')}?{urlencode({'path': rel})}"
+        return _bad_request(f'"{rel}" is a file, not a folder. Fetch it from download_url.',
+                            download_url=download_url)
+    if not permissions.can_read_path(user, rel):
+        return not_found
+    try:
+        entries = adapt_share.list_folder(rel)
+    except adapt_share.AdaptPathError:
+        return not_found
+
+    visible = permissions.visible_children(user, rel)
+    if visible is not None:
+        # Open only on the way to a grant: just the branches that lead there.
+        entries = [e for e in entries if e.is_dir and e.name.casefold() in visible]
+
+    page_size = _whole_number(request, 'page_size', ADAPT_PAGE_SIZE)
+    if page_size is None:
+        return _bad_request('page_size must be a whole number of at least 1')
+    paginator = Paginator(entries, min(page_size, ADAPT_MAX_PAGE_SIZE))
+    number = _whole_number(request, 'page', 1)
+    if number is None or number > paginator.num_pages:
+        return _bad_request(f'page must be a whole number from 1 to {paginator.num_pages}')
+    page = paginator.page(number)
+
+    return Response({
+        'path': rel,
+        'entries': [_adapt_entry(entry, rel, path) for entry in page.object_list],
+        'count': paginator.count,
+        'page': number,
+        'page_size': paginator.per_page,
+        'page_count': paginator.num_pages,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_adapt_download(request):
+    """
+    Download one file from the ADAPT share by path.
+
+    GET /api/v1/adapt/download/?path=Soils/cores.csv
+    Authorization: Token your_api_token
+
+    Streams the file as an attachment, typed from its name. Nothing is
+    recorded in the database. 404 unless the user's grants reach the file
+    and it is a regular file ADMA shows: folders, links, hidden and excluded
+    names, and paths that leave the share all answer 404.
+    """
+    not_found = Response({'error': ADAPT_FILE_NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
+    try:
+        rel = adapt_share.normalize(request.query_params.get('path', ''))
+        path = adapt_share.resolve(rel)
+    except adapt_share.AdaptPathError:
+        return not_found
+    if not rel or not _may_download(request.user, rel):
+        return not_found
+    filelike = _open_regular_file(path)
+    if filelike is None:
+        return not_found
+    return FileResponse(filelike, as_attachment=True, filename=adapt_share.name(rel))
