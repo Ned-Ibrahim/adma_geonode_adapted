@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load folder_counts %}
+{% load folder_counts humanize %}
 
 {% block title %}Search - ADMA{% endblock %}
 
@@ -312,7 +312,7 @@
                     <i class="fas fa-search-plus me-2"></i>Search Results
                 </h4>
                 {% if total_results > 0 %}
-                    <span class="badge bg-secondary">{{ total_results }} result{{ total_results|pluralize }} found</span>
+                    <span class="badge bg-secondary">{{ total_results|intcomma }} result{{ total_results|pluralize }} found</span>
                 {% endif %}
             </div>
             
@@ -583,7 +583,7 @@
                     </ul>
                     <div class="text-center mt-2">
                         <small class="text-muted">
-                            Showing {{ page_obj.start_index }} - {{ page_obj.end_index }} of {{ total_results }} result{{ total_results|pluralize }}
+                            Showing {{ page_obj.start_index|intcomma }} - {{ page_obj.end_index|intcomma }} of {{ total_results|intcomma }} result{{ total_results|pluralize }}
                         </small>
                     </div>
                 </nav>

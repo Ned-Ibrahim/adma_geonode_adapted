@@ -189,9 +189,9 @@ class Folder(models.Model):
     def describe_contents(subfolder_count, total_files):
         parts = []
         if subfolder_count > 0:
-            parts.append(f"{subfolder_count} folder{'s' if subfolder_count != 1 else ''}")
+            parts.append(f"{subfolder_count:,} folder{'s' if subfolder_count != 1 else ''}")
         if total_files > 0:
-            parts.append(f"{total_files} file{'s' if total_files != 1 else ''}")
+            parts.append(f"{total_files:,} file{'s' if total_files != 1 else ''}")
 
         if not parts:
             return "Empty"

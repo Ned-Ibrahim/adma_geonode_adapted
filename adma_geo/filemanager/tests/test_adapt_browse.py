@@ -167,7 +167,7 @@ class BrowsePages(BrowseCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.names(response), ['Soils'])
         self.assertNotContains(response, 'readme.txt')
-        self.assertContains(response, '(1 folder, 0 files)')
+        self.assertContains(response, '(1 folder)')
 
     def test_a_granted_folder_lists_its_folders_and_files(self):
         response = self.get(self.reader, '/adapt/browse/Soils/')
@@ -253,7 +253,7 @@ class Paging(BrowseCase):
 
     def test_the_contents_header_counts_the_whole_listing(self):
         self.many('Big', 250)
-        self.assertContains(self.page('Big', 2), '(0 folders, 250 files)')
+        self.assertContains(self.page('Big', 2), '(250 files)')
 
 
 class Controls(BrowseCase):

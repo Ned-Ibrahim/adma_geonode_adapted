@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load humanize %}
 
 {% block title %}{{ folder_name }} - ADMA{% endblock %}
 
@@ -131,7 +132,7 @@
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">
                     <i class="fas fa-list me-2"></i>Contents
-                    <span class="text-muted">({{ total_subfolders }} folder{{ total_subfolders|pluralize }}, {{ total_files }} file{{ total_files|pluralize }})</span>
+                    {% if total_items %}<span class="text-muted">({{ contents }})</span>{% endif %}
                 </h5>
                 <div class="btn-group" role="group" aria-label="View toggle">
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="listViewBtn" onclick="toggleView('list')">
@@ -144,15 +145,16 @@
             </div>
             <div class="card-body">
                 {% if entries %}
-                <!-- Panel View -->
+                <!-- Panel View: every entry is rendered here once; buildListView makes the list from it on demand. -->
                 <div id="panelView" class="view-container">
+                {% spaceless %}
                 {% if subfolders %}
                 <div class="mb-4">
                     <h6 class="text-muted mb-3"><i class="fas fa-folder me-2"></i>Folders</h6>
                     <div class="row">
                         {% for subfolder in subfolders %}
                         <div class="col-md-4 col-sm-6 mb-3">
-                            <div class="folder-item" onclick="window.location.href='{{ subfolder.url|escapejs }}'">
+                            <div class="folder-item" data-type="Folder" data-size="{{ subfolder.summary }}" data-modified="{{ subfolder.modified|date:'M d, Y H:i' }}">
                                 <div class="d-flex align-items-center">
                                     <i class="fas fa-folder folder-icon"></i>
                                     <div class="flex-grow-1">
@@ -177,14 +179,12 @@
                     <div class="row">
                         {% for file in files %}
                         <div class="col-md-4 col-sm-6 mb-3">
-                            <div class="file-item" onclick="window.location.href='{{ file.url|escapejs }}'">
+                            <div class="file-item" data-type="{{ file.file.file_type|title }}" data-size="{{ file.file.get_size_display }}" data-modified="{{ file.modified|date:'M d, Y H:i' }}">
                                 <div class="d-flex align-items-center">
                                     <i class="{{ file.file.get_icon_class }} file-icon"></i>
                                     <div class="flex-grow-1">
                                         <h6 class="mb-1 fw-bold" title="{{ file.name }}"><a href="{{ file.url }}" class="text-reset text-decoration-none">{{ file.name|truncatechars:25 }}</a></h6>
-                                        <small class="text-muted">
-                                            {{ file.file.get_size_display }} • {{ file.file.file_type|title }}
-                                        </small>
+                                        <small class="text-muted">{{ file.file.get_size_display }} • {{ file.file.file_type|title }}</small>
                                         <br>
                                         <small class="text-muted">{{ file.modified|date:"M d, Y" }}</small>
                                     </div>
@@ -195,9 +195,10 @@
                     </div>
                 </div>
                 {% endif %}
+                {% endspaceless %}
                 </div>
 
-                <!-- List View -->
+                <!-- List View: filled from the panels by buildListView the first time it is shown -->
                 <div id="listView" class="view-container" style="display: none;">
                     <div class="table-responsive">
                         <table class="table table-hover">
@@ -209,34 +210,7 @@
                                     <th>Modified</th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                {% for subfolder in subfolders %}
-                                <tr style="cursor: pointer;" onclick="window.location.href='{{ subfolder.url|escapejs }}'">
-                                    <td>
-                                        <div class="d-flex align-items-center">
-                                            <i class="fas fa-folder me-3"></i>
-                                            <strong>{{ subfolder.name }}</strong>
-                                        </div>
-                                    </td>
-                                    <td><span class="text-muted">Folder</span></td>
-                                    <td><span class="text-muted">{{ subfolder.summary }}</span></td>
-                                    <td>{{ subfolder.modified|date:"M d, Y H:i" }}</td>
-                                </tr>
-                                {% endfor %}
-                                {% for file in files %}
-                                <tr style="cursor: pointer;" onclick="window.location.href='{{ file.url|escapejs }}'">
-                                    <td>
-                                        <div class="d-flex align-items-center">
-                                            <i class="{{ file.file.get_icon_class }} me-3"></i>
-                                            <strong>{{ file.name }}</strong>
-                                        </div>
-                                    </td>
-                                    <td><span class="badge bg-secondary">{{ file.file.file_type|title }}</span></td>
-                                    <td>{{ file.file.get_size_display }}</td>
-                                    <td>{{ file.modified|date:"M d, Y H:i" }}</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
+                            <tbody id="listViewBody"></tbody>
                         </table>
                     </div>
                 </div>
@@ -264,8 +238,8 @@
                     <div class="card-body py-3">
                         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                             <div class="text-muted">
-                                Showing <strong>{{ page_obj.start_index }}-{{ page_obj.end_index }}</strong> of <strong>{{ total_items }}</strong> items
-                                <span class="ms-2 badge bg-secondary">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+                                Showing <strong>{{ page_obj.start_index|intcomma }}-{{ page_obj.end_index|intcomma }}</strong> of <strong>{{ total_items|intcomma }}</strong> items
+                                <span class="ms-2 badge bg-secondary">Page {{ page_obj.number|intcomma }} of {{ page_obj.paginator.num_pages|intcomma }}</span>
                             </div>
                             <nav aria-label="Folder pages">
                                 <ul class="pagination pagination-sm mb-0">
@@ -279,9 +253,9 @@
                                     {% endif %}
                                     {% for num in page_obj.paginator.page_range %}
                                         {% if page_obj.number == num %}
-                                            <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+                                            <li class="page-item active"><span class="page-link">{{ num|intcomma }}</span></li>
                                         {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
-                                            <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
+                                            <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num|intcomma }}</a></li>
                                         {% endif %}
                                     {% endfor %}
                                     {% if page_obj.has_next %}
@@ -331,13 +305,6 @@
                         <i class="fas fa-upload me-2"></i>Upload Files
                     </button>
                 </div>
-                <div class="mt-4">
-                    <h6>Folder Details</h6>
-                    <ul class="list-unstyled">
-                        <li><i class="fas fa-folder me-2"></i>{{ total_subfolders }} folder{{ total_subfolders|pluralize }}, {{ total_files }} file{{ total_files|pluralize }}</li>
-                        <li><i class="fas fa-hdd me-2"></i>ADAPT share</li>
-                    </ul>
-                </div>
             </div>
         </div>
     </div>
@@ -358,12 +325,6 @@
                     <div class="mb-3">
                         <label for="folderName" class="form-label">Folder Name</label>
                         <input type="text" class="form-control" id="folderName" required>
-                    </div>
-                    <div class="form-check d-none">
-                        <input class="form-check-input" type="checkbox" id="folderIsPublic">
-                        <label class="form-check-label" for="folderIsPublic">
-                            Make this folder public
-                        </label>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -394,12 +355,6 @@
                     <div id="selectedFiles" class="mt-3" style="display: none;">
                         <h6>Selected Files:</h6>
                         <ul id="fileList" class="list-group"></ul>
-                    </div>
-                    <div class="form-check mt-3 d-none">
-                        <input class="form-check-input" type="checkbox" id="filesArePublic">
-                        <label class="form-check-label" for="filesArePublic">
-                            Make these files public
-                        </label>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -445,7 +400,6 @@ document.getElementById('createFolderForm').addEventListener('submit', async fun
     e.preventDefault();
     
     const name = document.getElementById('folderName').value.trim();
-    const isPublic = document.getElementById('folderIsPublic').checked;
     
     if (!name) return;
     
@@ -458,8 +412,7 @@ document.getElementById('createFolderForm').addEventListener('submit', async fun
             },
             body: JSON.stringify({
                 name: name,
-                adapt_path: '{{ rel|escapejs }}',
-                is_public: isPublic
+                adapt_path: '{{ rel|escapejs }}'
             })
         });
         
@@ -539,7 +492,6 @@ document.getElementById('uploadForm').addEventListener('submit', async function(
         formData.append('files', file);
     }
     formData.append('adapt_path', '{{ rel|escapejs }}');
-    formData.append('is_public', document.getElementById('filesArePublic').checked);
     
     uploadBtn.disabled = true;
     uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Uploading...';
@@ -730,7 +682,6 @@ function renderSimpleFolderTree(structure, container) {
         formData.append('files', file);
         formData.append('file_paths', file.webkitRelativePath);
     }
-    formData.append('is_public', document.getElementById('foldersArePublic').checked);
     // Add the current folder ID so files are uploaded to this folder
     formData.append('adapt_path', '{{ rel|escapejs }}');
     
@@ -784,31 +735,82 @@ function renderSimpleFolderTree(structure, container) {
 
 <!-- View Toggle Script: always available -->
 <script>
-// View Toggle Functions
+// The list view is built from the panels the first time it is shown, so each
+// entry is sent once. Text goes in through textContent, never as markup.
+function buildListView() {
+    const body = document.getElementById('listViewBody');
+    if (!body || body.dataset.built) return;
+    body.dataset.built = 'true';
+    document.querySelectorAll('#panelView .folder-item, #panelView .file-item').forEach(function(item) {
+        const isFolder = item.classList.contains('folder-item');
+        const link = item.querySelector('a');
+        const row = body.insertRow();
+        row.style.cursor = 'pointer';
+        row.dataset.href = link.getAttribute('href');
+
+        const name = document.createElement('div');
+        name.className = 'd-flex align-items-center';
+        const icon = document.createElement('i');
+        icon.className = item.querySelector('i').className.replace(/\b(folder|file)-icon\b/, 'me-3');
+        const strong = document.createElement('strong');
+        strong.textContent = item.querySelector('h6').title || link.textContent;
+        name.append(icon, strong);
+        row.insertCell().appendChild(name);
+
+        const type = document.createElement('span');
+        type.className = isFolder ? 'text-muted' : 'badge bg-secondary';
+        type.textContent = item.dataset.type;
+        row.insertCell().appendChild(type);
+
+        const size = row.insertCell();
+        if (isFolder) {
+            const summary = document.createElement('span');
+            summary.className = 'text-muted';
+            summary.textContent = item.dataset.size;
+            size.appendChild(summary);
+        } else {
+            size.textContent = item.dataset.size;
+        }
+        row.insertCell().textContent = item.dataset.modified;
+    });
+}
+
+// A click anywhere on a panel or a list row opens its entry.
+document.addEventListener('click', function(e) {
+    if (e.target.closest('a, button')) return;
+    const entry = e.target.closest('#panelView .folder-item, #panelView .file-item, #listViewBody tr');
+    if (entry) {
+        window.location.href = entry.dataset.href || entry.querySelector('a').getAttribute('href');
+    }
+});
+
 function toggleView(viewType) {
     const listView = document.getElementById('listView');
     const panelView = document.getElementById('panelView');
     const listBtn = document.getElementById('listViewBtn');
     const panelBtn = document.getElementById('panelViewBtn');
-    
-    if (viewType === 'list') {
-        listView.style.display = 'block';
-        panelView.style.display = 'none';
-        listBtn.classList.add('active');
-        panelBtn.classList.remove('active');
-        localStorage.setItem('fileViewType', 'list');
-    } else {
-        listView.style.display = 'none';
-        panelView.style.display = 'block';
-        listBtn.classList.remove('active');
-        panelBtn.classList.add('active');
-        localStorage.setItem('fileViewType', 'panel');
+    const showList = viewType === 'list';
+
+    if (showList) buildListView();
+    if (listView) listView.style.display = showList ? 'block' : 'none';
+    if (panelView) panelView.style.display = showList ? 'none' : 'block';
+    listBtn.classList.toggle('active', showList);
+    panelBtn.classList.toggle('active', !showList);
+    try {
+        localStorage.setItem('fileViewType', showList ? 'list' : 'panel');
+    } catch (e) {
+        // Storage can be blocked; the choice then lasts only for this page.
     }
 }
 
 // Load saved view preference on page load
 document.addEventListener('DOMContentLoaded', function() {
-    const savedView = localStorage.getItem('fileViewType') || 'panel';
+    let savedView = 'panel';
+    try {
+        savedView = localStorage.getItem('fileViewType') || 'panel';
+    } catch (e) {
+        // Storage can be blocked; show the panels.
+    }
     toggleView(savedView);
 });
 </script>
@@ -858,12 +860,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <div class="form-check mt-3 d-none">
-                        <input class="form-check-input" type="checkbox" id="foldersArePublic">
-                        <label class="form-check-label" for="foldersArePublic">
-                            Make uploaded folders and files public
-                        </label>
                     </div>
                 </div>
                 <div class="modal-footer">

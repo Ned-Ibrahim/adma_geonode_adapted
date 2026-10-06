@@ -432,6 +432,8 @@
                     <button class="btn btn-outline-info" onclick="openRenameModal()">
                         <i class="fas fa-edit me-2"></i>Change Name
                     </button>
+                    {% endif %}
+                    {% if can_delete %}
                     <button class="btn btn-danger" onclick="deleteFile()">
                         <i class="fas fa-trash me-2"></i>Delete File
                     </button>
@@ -535,7 +537,7 @@ function openImageModal() {
 }
 {% endif %}
 
-{% if can_edit %}
+{% if can_edit or can_delete %}
 // Rename file functionality
 function openRenameModal() {
     const modal = new bootstrap.Modal(document.getElementById('renameModal'));

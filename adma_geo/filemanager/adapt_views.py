@@ -114,6 +114,7 @@ def adapt_folder(request, rel=''):
         'total_items': len(entries),
         'total_subfolders': total_subfolders,
         'total_files': len(entries) - total_subfolders,
+        'contents': Folder.describe_contents(total_subfolders, len(entries) - total_subfolders),
         'totals': totals,
         'indexed_at': indexed_at,
         'can_upload': can_upload,

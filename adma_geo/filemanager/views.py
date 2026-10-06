@@ -1003,6 +1003,7 @@ def file_detail(request, file_id):
     # An ADAPT record sits on the share by its path rather than in a Folder, and
     # outlives its file there: a file gone from the share has nothing to preview.
     adapt_rel = adapt_records.path_of(file_obj)
+    is_adapt_record = file_obj.is_third_party and file_obj.third_party_source == 'adapt'
     adapt_gone = adapt_records.is_gone(file_obj)
     adapt_crumbs = adapt_folder_name = adapt_folder_url = None
     if adapt_rel is not None:
@@ -1139,7 +1140,10 @@ def file_detail(request, file_id):
         'file_content': file_content,
         'csv_data': json.dumps(csv_data) if csv_data else None,
         'csv_headers': json.dumps(csv_headers) if csv_headers else None,
-        'can_edit': file_obj.owner == request.user,
+        # A record on the ADAPT share is never shared or renamed from ADMA, and
+        # is deleted only by an owner who may write there (see delete_item).
+        'can_edit': file_obj.owner == request.user and not is_adapt_record,
+        'can_delete': file_obj.owner == request.user and _adapt_delete_refusal(request.user, file_obj) is None,
         'is_realm5_observation': is_realm5_observation,
         'realm5_observation_data': json.dumps(realm5_observation_data) if realm5_observation_data else None,
         'realm5_variables': json.dumps(realm5_variables) if realm5_variables else None,
