@@ -162,6 +162,18 @@ class BrowseCase(Mount, TestCase):
 
 class BrowsePages(BrowseCase):
 
+    def test_a_reload_reads_the_share_again(self):
+        # A share that does not update the folder's modified time when a file
+        # appears: the cached listing stays, until the user reloads the page.
+        self.get(self.admin, '/adapt/browse/Soils/')
+        folder = os.path.join(self.mount, 'Soils')
+        stamp = os.stat(folder).st_mtime_ns
+        self.touch('Soils/new.csv')
+        os.utime(folder, ns=(stamp, stamp))
+        self.assertNotIn('new.csv', self.names(self.get(self.admin, '/adapt/browse/Soils/')))
+        response = self.client.get('/adapt/browse/Soils/', HTTP_CACHE_CONTROL='max-age=0')
+        self.assertIn('new.csv', self.names(response))
+
     def test_a_reader_sees_only_their_branch_at_the_top_and_no_files(self):
         response = self.get(self.reader, '/adapt/')
         self.assertEqual(response.status_code, 200)
