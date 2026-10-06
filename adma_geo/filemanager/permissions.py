@@ -237,27 +237,3 @@ def readable_adapt_roots(user) -> List[Folder]:
         is_third_party=True, third_party_source='adapt', parent__isnull=True, deletion_in_progress=False,
     )
     return filter_readable(user, roots)
-
-
-def adapt_folder_ids(user, include_path=False) -> Set:
-    """Ids of the ADAPT folders the user's read grants cover: each granted folder and its whole subtree.
-
-    For queries over many rows at once, such as search, where calling can_read
-    row by row would be too slow. With `include_path`, the folders above a grant
-    are included too, as can_read opens them for navigation. Superusers are not
-    special-cased here; callers let them see all of ADAPT directly.
-    """
-    if not _signed_in(user):
-        return set()
-    grants = _grants(user)
-    if not grants.read:
-        return set()
-    covered = set()
-    rows = Folder.objects.filter(third_party_source='adapt').values_list('id', 'parent_id', 'third_party_id')
-    for pk, parent_id, rel in rows:
-        if parent_id is None or rel == ROOT_SENTINEL:
-            rel = ''
-        key = adapt_share.key(rel or '')
-        if grants.covers(key, grants.read) or (include_path and key in grants.on_path):
-            covered.add(pk)
-    return covered

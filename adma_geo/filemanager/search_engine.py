@@ -5,12 +5,15 @@ Clean PostgreSQL-based search engine for ADMA Geo.
 
 This module provides comprehensive search functionality using PostgreSQL
 with support for name matching, type filtering, visibility, and file types.
+
+Files and folders on the ADAPT share come from the ADAPT index (see
+filemanager.adapt_index), never from File and Folder rows.
 """
 
 from django.db.models import Q
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from .models import File, Folder, Map
-from . import permissions
+from . import adapt_index, adapt_share
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,6 +26,9 @@ class SearchEngine:
     - Type filtering (file, folder, map)
     - Visibility filtering (is_public)
     - File type filtering (csv, gis, etc.)
+
+    ADAPT hits have the type 'adapt_file' or 'adapt_folder', no object, and
+    their address on the share in 'url'.
     """
     
     def search(self, user, query=None, content_type=None, is_public=None, file_type=None, limit=100):
@@ -32,7 +38,7 @@ class SearchEngine:
         Args:
             user: Django User object (can be AnonymousUser)
             query: Search query string for name matching
-            content_type: 'file', 'folder', 'map', or None (all types)
+            content_type: 'file', 'folder', 'map', or None (all types); ADAPT files and folders count as files and folders
             is_public: True/False/None (any visibility)
             file_type: 'csv', 'gis', etc. or None (any file type)
             limit: Maximum number of results
@@ -56,6 +62,10 @@ class SearchEngine:
         if not content_type or content_type == 'map':
             map_results = self._search_maps(user, query, is_public, limit)
             results.extend(map_results)
+        
+        # Search the ADAPT share
+        if not content_type or content_type in ('file', 'folder'):
+            results.extend(self._search_adapt(user, query, content_type, is_public, file_type, limit))
         
         # Sort by relevance if we have a query, otherwise by name
         if query and query.strip():
@@ -169,46 +179,62 @@ class SearchEngine:
         
         return results
     
+    def _search_adapt(self, user, query, content_type, is_public, file_type, limit):
+        """Search the ADAPT index: what the user's grants let them see on the share.
+
+        ADAPT is never public. A file type filter finds only files, as folders have none.
+        """
+        if is_public:
+            return []
+        hits = adapt_index.search(user, query, kind=content_type or None, limit=limit, file_type=file_type or None)
+        if not hits:
+            return []
+        summaries = adapt_index.folder_summaries(user, [hit['path'] for hit in hits if hit['is_dir']])
+
+        results = []
+        for hit in hits:
+            folder = adapt_share.parent(hit['path'])
+            results.append({
+                'id': hit['path'],
+                'name': hit['name'],
+                'type': 'adapt_folder' if hit['is_dir'] else 'adapt_file',
+                'object': None,
+                'url': hit['url'],
+                'relevance': self._calculate_relevance(hit['name'], query) if query else 1.0,
+                'metadata': {
+                    'path': hit['path'],
+                    'location': f'ADAPT/{folder}' if folder else 'ADAPT',
+                    'file_type': hit['file_type'],
+                    'icon': 'fas fa-folder' if hit['is_dir'] else File.icon_class_for(hit['file_type']),
+                    'size': '' if hit['is_dir'] else File.describe_size(hit['size']),
+                    'summary': summaries.get(hit['path'], ''),
+                    'is_public': False,
+                    'modified_at': hit['mtime'].isoformat() if hit['mtime'] else None,
+                }
+            })
+
+        return results
+
     def _get_base_file_queryset(self, user):
-        """Get base file queryset with proper permissions."""
+        """Get base file queryset with proper permissions. ADAPT files come from the index instead."""
         if user.is_authenticated:
-            # Authenticated user: their files + public files + granted ADAPT files.
-            # ADAPT rows are never public, whatever their flag says.
-            return File.objects.filter(
-                Q(owner=user) | (Q(is_public=True) & ~Q(third_party_source='adapt')) | self._adapt_files(user)
-            ).exclude(deletion_in_progress=True).order_by('name')
+            # Authenticated user: their files + public files
+            queryset = File.objects.filter(Q(owner=user) | Q(is_public=True))
         else:
             # Anonymous user: only public files
-            return File.objects.filter(
-                is_public=True
-            ).exclude(deletion_in_progress=True).order_by('name')
+            queryset = File.objects.filter(is_public=True)
+        return queryset.exclude(third_party_source='adapt').exclude(deletion_in_progress=True).order_by('name')
     
     def _get_base_folder_queryset(self, user):
-        """Get base folder queryset with proper permissions."""
+        """Get base folder queryset with proper permissions. ADAPT folders come from the index instead."""
         if user.is_authenticated:
-            # Authenticated user: their folders + public folders + granted ADAPT folders.
-            # ADAPT rows are never public, whatever their flag says.
-            return Folder.objects.filter(
-                Q(owner=user) | (Q(is_public=True) & ~Q(third_party_source='adapt')) | self._adapt_folders(user)
-            ).exclude(deletion_in_progress=True).order_by('name')
+            # Authenticated user: their folders + public folders
+            queryset = Folder.objects.filter(Q(owner=user) | Q(is_public=True))
         else:
             # Anonymous user: only public folders
-            return Folder.objects.filter(
-                is_public=True
-            ).exclude(deletion_in_progress=True).order_by('name')
+            queryset = Folder.objects.filter(is_public=True)
+        return queryset.exclude(third_party_source='adapt').exclude(deletion_in_progress=True).order_by('name')
     
-    def _adapt_files(self, user):
-        """ADAPT files the user may find: those inside a granted folder's subtree."""
-        if user.is_superuser:
-            return Q(third_party_source='adapt')
-        return Q(third_party_source='adapt', folder_id__in=permissions.adapt_folder_ids(user))
-
-    def _adapt_folders(self, user):
-        """ADAPT folders the user may find: granted subtrees and the folders leading to them."""
-        if user.is_superuser:
-            return Q(third_party_source='adapt')
-        return Q(third_party_source='adapt', pk__in=permissions.adapt_folder_ids(user, include_path=True))
-
     def _get_base_map_queryset(self, user):
         """Get base map queryset with proper permissions."""
         if user.is_authenticated:

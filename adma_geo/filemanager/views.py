@@ -2578,11 +2578,15 @@ class SearchView(TemplateView):
                     limit=1000  # Get more results for pagination
                 )
                 
-                # Convert results to template format
+                # Convert results to template format. ADAPT hits have no object:
+                # the template shows their name, url and metadata instead.
                 for result in raw_results:
                     search_results.append({
                         'object': result['object'],
                         'type': result['type'],
+                        'name': result['name'],
+                        'url': result.get('url'),
+                        'metadata': result['metadata'],
                         'relevance': result.get('relevance', 1.0),
                         'metadata_text': result['name']
                     })
@@ -2645,6 +2649,21 @@ def search_api(request):
             suggestions = []
             for result in results:
                 try:
+                    if result['type'] in ('adapt_file', 'adapt_folder'):
+                        # On the ADAPT share: no row, so no id; the path names it.
+                        suggestions.append({
+                            'id': None,
+                            'type': 'folder' if result['type'] == 'adapt_folder' else 'file',
+                            'source': 'adapt',
+                            'path': result['metadata']['path'],
+                            'name': result['name'],
+                            'icon': result['metadata']['icon'],
+                            'url': result['url'],
+                            'is_public': False,
+                            'relevance': result.get('relevance', 1.0)
+                        })
+                        continue
+
                     obj = result['object']
                     obj_type = result['type']
                     

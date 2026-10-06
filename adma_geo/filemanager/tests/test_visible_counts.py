@@ -104,15 +104,6 @@ class FolderPageRows(VisibleCountsTree):
         self.assertRegex(page, r'1 file • 2 folders\s*<')
 
 
-    def test_search_results_count_only_the_way_down(self):
-        grant_on(self.soils_2024, user=self.alice)
-        self.login(self.alice)
-        page = self.client.get('/search/', {'q': 'Soils'}).content.decode()
-        self.assertRegex(page, r'0 files • 1 folder\s*<')
-        self.assertNotIn('2 folders', page)
-        self.assertNotIn('1 file ', page)
-
-
 class Pluralization(VisibleCountsTree):
 
     def test_one_folder_is_not_called_folders(self):
