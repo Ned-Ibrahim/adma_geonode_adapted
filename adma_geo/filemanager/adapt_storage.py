@@ -1,33 +1,37 @@
 """Write-back to the mounted ADAPT share.
 
-ADAPT is an SMB share mounted at ``settings.ADAPT_MOUNT``. ADMA indexes it by
-reference: a :class:`~filemanager.models.File` row carries the path on the mount
-in ``third_party_url`` and streams the bytes live, instead of copying them into
-``MEDIA_ROOT``. Only files in use get a row; browsing reads the share itself.
+ADAPT is an SMB share mounted at ``settings.ADAPT_MOUNT``. ADMA shows it as it
+is (see adapt_share) and keeps no row for an ordinary file or folder on it, so
+an upload or a new folder lands on the share and nothing else changes. A GIS
+file is the exception: its processing and its map layers hang off a File
+record, so an upload of one gets that record at once, owned by the uploader.
 
 This module is the only place in ADMA that writes to the share, and it holds
 three rules so that the rest of the code does not have to:
 
-1.  Every path is resolved and confirmed to sit under the mount before it is
-    touched. A folder's ``third_party_id`` is editable in Django admin, so it is
-    untrusted input rather than a trusted path.
-2.  A write never overwrites. Names are reserved with ``O_EXCL``, which the
-    server applies atomically, so two simultaneous uploads and a file dropped on
-    the share out of band all lose the race instead of clobbering each other.
-3.  Rows are keyed by their path on the share (``third_party_id``), the same
-    way as every other ADAPT row, so an upload and a later open of the same file
-    find one row rather than two.
+1.  A folder is named by its path on the share, which arrives from a browser
+    or an API client and is untrusted. adapt_share.resolve() confirms that it
+    lands inside the mount before anything is touched.
+2.  A write never overwrites. Names are reserved with ``O_EXCL`` (and with
+    ``mkdir`` for folders), which the server applies atomically, so two
+    simultaneous uploads and a file dropped on the share out of band all lose
+    the race instead of clobbering each other.
+3.  A GIS upload's record comes from adapt_records.record_for, the same lookup
+    that opening a file uses, so an upload and a later open of the same file
+    find one record rather than two.
 
 Who may write where is not decided here: callers check
-``permissions.can_write`` first (see ``views.upload_target``).
+``permissions.can_write_path`` first (see ``views.upload_target``).
 """
 import logging
-import mimetypes
 import os
 import uuid
+from collections import namedtuple
 from pathlib import Path
 
 from django.conf import settings
+
+from . import adapt_share
 
 logger = logging.getLogger(__name__)
 
@@ -97,49 +101,25 @@ def reference_url(abs_path):
     return os.path.join(configured, *rel_to_mount(abs_path).split('/'))
 
 
+def is_gis(name):
+    """True for a file ADMA processes into map layers on upload, by the rule ordinary uploads follow (File.is_spatial_name)."""
+    from .models import File
+
+    return File.is_spatial_name(name)
+
+
+def _listing_changed(rel_dir):
+    """Called after every write into folder `rel_dir` on the share: drops its cached listing, so the write shows at once."""
+    adapt_share.forget_listing(rel_dir)
+
+
 # ------------------------------------------------------------------- path rules
 
-def _contained(path, root):
+def _normalize(rel):
     try:
-        return os.path.commonpath([os.path.realpath(path), root]) == root
-    except ValueError:
-        # Different drives, or a mix of absolute and relative paths.
-        return False
-
-
-def folder_share_path(folder):
-    """Absolute path on the mount for an ADAPT folder.
-
-    Raises AdaptWriteError if the folder is not an ADAPT folder, or if its
-    recorded path resolves outside the mount.
-    """
-    if not is_adapt_folder(folder):
-        raise AdaptWriteError(f'"{folder}" is not a folder on the ADAPT share')
-
-    root = mount_root()
-    rel = (folder.third_party_id or '').strip()
-    if rel == ROOT_SENTINEL or (not rel and folder.parent_id is None):
-        return root
-    if not rel:
-        # A nested folder with no recorded path would otherwise resolve to the
-        # share root, quietly landing uploads at the top of the warehouse.
-        raise AdaptWriteError(
-            f'Folder "{folder}" has no recorded path on the ADAPT share. '
-            f'Set its path (third_party_id) in the admin.'
-        )
-
-    rel = rel.replace('\\', '/')
-    if rel.startswith('/') or os.path.isabs(rel) or (len(rel) > 1 and rel[1] == ':'):
-        # Recorded paths are relative to the mount. An absolute one was not
-        # written by ADMA and is not trusted.
-        raise AdaptWriteError(f'Refusing to touch "{rel}": not a path relative to the ADAPT mount')
-    rel = rel.strip('/')
-    candidate = os.path.realpath(os.path.join(root, rel))
-    if not _contained(candidate, root):
-        raise AdaptWriteError(
-            f'Refusing to touch "{rel}": it resolves outside the ADAPT mount'
-        )
-    return candidate
+        return adapt_share.normalize(rel)
+    except adapt_share.AdaptPathError as exc:
+        raise AdaptWriteError(str(exc)) from exc
 
 
 def _assert_mounted(root):
@@ -148,7 +128,7 @@ def _assert_mounted(root):
     When the CIFS mount is missing, /adapt is an ordinary empty directory inside
     the container. Writing there succeeds and then vanishes with the container,
     which looks exactly like silent data loss. An empty share is indistinguishable
-    from a dropped mount, so both are refused. index_adapt refuses on the same test.
+    from a dropped mount, so both are refused.
     """
     if not os.path.isdir(root):
         raise AdaptWriteError(f'ADAPT mount {root} does not exist')
@@ -176,25 +156,32 @@ def _assert_prefix_allowed(abs_path, root):
     )
 
 
-def assert_writable(folder):
-    """Confirm ADMA may write into this ADAPT folder, and return its path."""
+def assert_writable(rel):
+    """Confirm ADMA may write into folder `rel` on the share, and return its absolute path.
+
+    The path is untrusted: one that does not normalize, or that resolves
+    outside the mount (through "..", or a symlink on the share), is refused.
+    """
     if not write_enabled():
         raise AdaptWriteDisabled(WRITE_DISABLED_MESSAGE)
     root = mount_root()
     _assert_mounted(root)
-    path = folder_share_path(folder)
+    try:
+        path = adapt_share.resolve(rel)
+    except adapt_share.AdaptPathError as exc:
+        raise AdaptWriteError(str(exc)) from exc
     _assert_prefix_allowed(path, root)
     if not os.path.isdir(path):
-        raise AdaptWriteError(f'"{rel_to_mount(path)}" is not a directory on the share')
+        raise AdaptWriteError(f'"{_normalize(rel)}" is not a folder on the ADAPT share')
     return path
 
 
-def validate_name(name):
+def _check_storable(name):
     """Reject names the share cannot store faithfully.
 
     Stricter than POSIX needs, because the warehouse is a Windows share. Windows
-    silently strips trailing dots and spaces, which would leave the name in the
-    database and the name on the share disagreeing with each other permanently.
+    silently strips trailing dots and spaces, which would leave the name ADMA
+    reports and the name on the share disagreeing with each other permanently.
     """
     if not name or name in ('.', '..'):
         raise AdaptWriteError('Invalid name')
@@ -211,6 +198,17 @@ def validate_name(name):
         )
     if Path(name).stem.upper() in _WINDOWS_RESERVED:
         raise AdaptWriteError(f'"{name}" is a reserved name on Windows')
+
+
+def validate_name(name, is_dir=False):
+    """Reject names the share cannot store, and names ADMA never shows (see adapt_share.is_hidden).
+
+    A hidden name written to the share would sit there out of sight of
+    everyone using ADMA, so it is not written at all.
+    """
+    _check_storable(name)
+    if adapt_share.is_hidden(name, is_dir=is_dir):
+        raise AdaptWriteError(f'"{name}" is hidden in ADMA, so it is not written to the ADAPT share')
     return name
 
 
@@ -238,25 +236,33 @@ def _discard(path):
 
 # ----------------------------------------------------------------------- writes
 
-def write_upload(folder, uploaded_file, preferred_name, taken=()):
-    """Stream an uploaded file onto the share inside ``folder``.
+# A file written to the share: its path there, the name it landed under (the
+# one asked for, or that name with a _1 suffix), its size in bytes, and its File
+# record for a GIS file, else None.
+Upload = namedtuple('Upload', 'path name size record')
+
+# A folder upload written to the share: the Uploads, the paths of the folders
+# it made, (asked, made) for each top folder that got a suffix, and the paths
+# in the upload left out because ADMA would not show them.
+Tree = namedtuple('Tree', 'files folders renamed skipped')
+
+
+def write_upload(rel_dir, uploaded_file, preferred_name):
+    """Stream an uploaded file onto the share inside folder `rel_dir`.
 
     Returns (absolute_path, name_actually_used, size_in_bytes).
 
     The name is reserved with O_EXCL before a single byte is written, so the
     file on the share is never overwritten and the name cannot be taken by a
-    concurrent upload between the check and the write. Names in ``taken`` are
-    skipped as well: they belong to rows whose file has gone from the share but
-    which the next prune has not removed yet.
+    concurrent upload between the check and the write.
     """
-    dir_path = assert_writable(folder)
+    rel_dir = _normalize(rel_dir)
+    dir_path = assert_writable(rel_dir)
     validate_name(preferred_name)
 
     fd = None
     target = None
     for candidate in _candidate_names(preferred_name):
-        if candidate in taken:
-            continue
         target = os.path.join(dir_path, candidate)
         try:
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
@@ -288,151 +294,127 @@ def write_upload(folder, uploaded_file, preferred_name, taken=()):
         raise
 
     logger.info('Wrote %s bytes to ADAPT share at %s', written, rel_to_mount(target))
+    _listing_changed(rel_dir)
     return target, name, written
 
 
-def create_reference_upload(folder, uploaded_file, owner, preferred_name=None):
-    """Write an upload onto the share and record it as an ADAPT reference.
+def upload_file(rel_dir, uploaded_file, owner, preferred_name=None):
+    """Write an upload into folder `rel_dir` on the share, and return its Upload.
 
-    The resulting row is keyed by its path like every other ADAPT row, except
-    that it is owned by the uploading user rather than by the ADAPT root's owner,
-    so that the upload is attributable. Like every ADAPT row it is not public:
-    FolderGrants decide who sees it.
+    ADMA records nothing for it, except for a GIS file (is_gis): that gets its
+    File record, owned by `owner`, and its processing starts, as for a GIS file
+    uploaded to ADMA's own storage.
     """
-    from .models import File
+    rel_dir = _normalize(rel_dir)
+    abs_path, name, size = write_upload(rel_dir, uploaded_file, preferred_name or uploaded_file.name)
+    rel = adapt_share.join(rel_dir, name)
+    if not is_gis(name):
+        return Upload(rel, name, size, None)
+    from . import adapt_records  # imported here: adapt_records imports this module
 
-    name_max = File._meta.get_field('name').max_length
-    id_max = File._meta.get_field('third_party_id').max_length
-    url_max = File._meta.get_field('third_party_url').max_length
-
-    preferred = preferred_name or uploaded_file.name
-    if len(preferred) > name_max:
-        raise AdaptWriteError(f'File name is too long (max {name_max} characters)')
-
-    taken = set(File.objects.filter(folder=folder).values_list('name', flat=True))
-    abs_path, name, size = write_upload(folder, uploaded_file, preferred, taken=taken)
-    url = reference_url(abs_path)
-    if len(url) > url_max:
-        _discard(abs_path)
-        raise AdaptWriteError(
-            f'Path on the share is too long to record (max {url_max} characters)'
-        )
-
-    mime, _ = mimetypes.guess_type(name)
-    file_obj = File(
-        name=name,
-        folder=folder,
-        owner=owner,
-        is_public=False,
-        file_size=size,
-        mime_type=mime or '',
-        is_third_party=True,
-        third_party_source='adapt',
-        third_party_id=rel_to_mount(abs_path)[:id_max],
-        third_party_url=url,
-    )
-    file_obj.apply_extension_metadata(name)
     try:
-        file_obj.save()
-    except BaseException:
-        # The bytes are on the share but nothing references them. Roll back so a
-        # later sync does not resurrect a file the user was told failed to upload.
+        record = adapt_records.record_for(rel, owner=owner)
+    except BaseException as exc:
+        # The user is told the upload failed, so its bytes do not stay behind.
         _discard(abs_path)
+        _listing_changed(rel_dir)
+        if isinstance(exc, adapt_share.AdaptPathError):
+            # For example a path too long to record.
+            raise AdaptWriteError(str(exc)) from exc
         raise
-    _add_to_cached_totals(folder, size)
-    return file_obj
+    from .tasks import process_gis_file_task
+    process_gis_file_task.delay(str(record.id))
+    return Upload(rel, name, size, record)
 
 
-def _add_to_cached_totals(folder, size):
-    """Count a new file in the cached totals of its folder and every folder above it.
-
-    ADAPT folders show precomputed totals (Folder.uses_cached_totals), so
-    without this an upload would not show in them.
-    """
-    from django.db.models import F
-
-    from .models import Folder
-
-    ids = []
-    current = folder
-    while current is not None and current.pk not in ids:
-        ids.append(current.pk)
-        current = current.parent
-    Folder.objects.filter(pk__in=ids).update(
-        cached_total_size=F('cached_total_size') + size,
-        cached_total_file_count=F('cached_total_file_count') + 1,
-    )
-
-
-def create_reference_folder(parent, name, owner):
-    """Create a directory on the share and record it as an ADAPT folder.
+def make_folder(rel_parent, name):
+    """Make folder `name` inside folder `rel_parent` on the share, and return its path.
 
     A name already taken on the share gets a suffix (_1, _2), as uploads do.
     """
-    from .models import Folder
+    rel_parent = _normalize(rel_parent)
+    dir_path = assert_writable(rel_parent)
+    validate_name(name, is_dir=True)
 
-    id_max = Folder._meta.get_field('third_party_id').max_length
-    name_max = Folder._meta.get_field('name').max_length
-    if len(name) > name_max:
-        raise AdaptWriteError(f'Folder name is too long (max {name_max} characters)')
-
-    dir_path = assert_writable(parent)
-    validate_name(name)
-
-    target = None
-    created = None
-    taken = set(Folder.objects.filter(parent=parent).values_list('name', flat=True))
     for candidate in _candidate_names(name, is_dir=True):
-        if candidate in taken:
-            continue
-        target = os.path.join(dir_path, candidate)
         try:
-            os.mkdir(target, 0o755)
+            os.mkdir(os.path.join(dir_path, candidate), 0o755)
         except FileExistsError:
             continue
         except OSError as exc:
             raise AdaptWriteError(
                 f'Cannot create folder "{candidate}" on the ADAPT share: {exc}'
             ) from exc
-        created = candidate
-        break
-    else:
-        raise AdaptWriteError(
-            f'Could not find a free name for folder "{name}" on the share'
-        )
-
-    try:
-        return Folder.objects.create(
-            name=created,
-            parent=parent,
-            owner=owner,
-            is_public=False,
-            is_third_party=True,
-            third_party_source='adapt',
-            third_party_id=rel_to_mount(target)[:id_max],
-        )
-    except BaseException:
-        try:
-            os.rmdir(target)
-        except OSError as exc:
-            logger.error('Could not remove orphaned ADAPT folder %s: %s', target, exc)
-        raise
+        _listing_changed(rel_parent)
+        return adapt_share.join(rel_parent, candidate)
+    raise AdaptWriteError(f'Could not find a free name for folder "{name}" on the share')
 
 
-def child_folder(parent, name, owner):
-    """The ADAPT folder `name` inside `parent` and whether it was created, making it on the share if needed.
+def merge_folder(rel_parent, name):
+    """Folder `name` inside folder `rel_parent` on the share, made if it is not there: (path, created).
 
     For uploads that merge into an existing tree rather than creating a fresh
-    copy of it. An existing row is reused only while its directory is still on
-    the share; a row left behind by a deleted directory is not written into.
+    copy of it. A name held by a file or by a symlink is never written
+    through: the new folder then gets a suffix, as make_folder gives it.
     """
-    from .models import Folder
+    rel_parent = _normalize(rel_parent)
+    dir_path = assert_writable(rel_parent)
+    validate_name(name, is_dir=True)
 
-    validate_name(name)
-    existing = Folder.objects.filter(
-        parent=parent, name=name, is_third_party=True, third_party_source='adapt',
-    ).order_by('created_at').first()
-    if existing is not None:
-        assert_writable(existing)
-        return existing, False
-    return create_reference_folder(parent, name, owner), True
+    target = os.path.join(dir_path, name)
+    try:
+        os.mkdir(target, 0o755)
+    except FileExistsError:
+        if os.path.isdir(target) and not os.path.islink(target):
+            return adapt_share.join(rel_parent, name), False
+        return make_folder(rel_parent, name), True
+    except OSError as exc:
+        raise AdaptWriteError(f'Cannot create folder "{name}" on the ADAPT share: {exc}') from exc
+    _listing_changed(rel_parent)
+    return adapt_share.join(rel_parent, name), True
+
+
+def upload_tree(rel_dir, entries, owner, fresh_top=False):
+    """Write a folder upload into folder `rel_dir` on the share, and return its Tree.
+
+    `entries` are (uploaded_file, path) pairs, each path relative to the
+    upload, such as "Plots/North/b.csv". Every name is checked before anything
+    is written, so one the share cannot store refuses the whole upload. An
+    entry ADMA would not show (".DS_Store", anything under ".git") is left out
+    and reported as skipped. Folders along the paths are merged into where
+    they exist; with `fresh_top`, a top folder whose name is taken is made
+    fresh with a suffix instead ("Plots_1"), as the web folder upload does for
+    ADMA's own folders.
+    """
+    rel_dir = _normalize(rel_dir)
+    assert_writable(rel_dir)
+
+    todo, skipped = [], []
+    for uploaded_file, path in entries:
+        parts = path.split('/')
+        for part in parts:
+            _check_storable(part)
+        last = len(parts) - 1
+        if any(adapt_share.is_hidden(part, is_dir=i < last) for i, part in enumerate(parts)):
+            skipped.append(path)
+        else:
+            todo.append((uploaded_file, parts))
+
+    made = {}       # folder path in the upload -> its path on the share
+    folders, renamed, files = [], [], []
+    for uploaded_file, parts in todo:
+        here = rel_dir
+        for depth, part in enumerate(parts[:-1]):
+            key = '/'.join(parts[:depth + 1])
+            if key not in made:
+                if fresh_top and depth == 0:
+                    made[key], created = make_folder(here, part), True
+                    if adapt_share.name(made[key]) != part:
+                        renamed.append((part, adapt_share.name(made[key])))
+                else:
+                    made[key], created = merge_folder(here, part)
+                if created:
+                    folders.append(made[key])
+            here = made[key]
+        files.append(upload_file(here, uploaded_file, owner, preferred_name=parts[-1]))
+    return Tree(files, folders, renamed, skipped)

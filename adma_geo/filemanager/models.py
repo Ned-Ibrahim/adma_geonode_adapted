@@ -315,18 +315,20 @@ class File(models.Model):
         """Derive file_type, is_spatial and geoserver_workspace from an extension.
 
         save() applies this for locally stored files. ADAPT references have no
-        FieldFile to read the name from, so adapt_storage applies it explicitly
+        FieldFile to read the name from, so adapt_records applies it explicitly
         using the name the file was given on the share.
         """
-        file_ext = Path(filename).suffix.lower()
-
-        # Check if it's a spatial file (for display purposes)
-        if file_ext in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', []):
+        if self.is_spatial_name(filename):
             self.is_spatial = True
             if not self.geoserver_workspace:
                 self.geoserver_workspace = getattr(settings, 'GEOSERVER_WORKSPACE', 'adma_geo')
 
         self.file_type = self.file_type_for(filename)
+
+    @staticmethod
+    def is_spatial_name(filename):
+        """True for a spatial file: an extension in settings.ALL_SPATIAL_EXTENSIONS. Uploads of one start GIS processing."""
+        return Path(filename).suffix.lower() in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', [])
 
     @staticmethod
     def file_type_for(filename):

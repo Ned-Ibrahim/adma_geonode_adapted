@@ -1,9 +1,10 @@
 """Unit tests for writing to the ADAPT share.
 
 These never touch the database or a real SMB mount. A temporary directory
-stands in for the mount and a stub stands in for a Folder row, which keeps the
-tests to the one thing this module is responsible for: deciding whether a write
-is allowed and performing it without ever destroying what is already there.
+stands in for the mount and folders are named by their path on it, which
+keeps the tests to the one thing this module is responsible for: deciding
+whether a write is allowed and performing it without ever destroying what is
+already there.
 """
 import os
 import tempfile
@@ -15,20 +16,6 @@ from filemanager import adapt_storage
 from filemanager.adapt_storage import AdaptWriteDisabled, AdaptWriteError
 
 
-class StubFolder:
-    """The attributes adapt_storage reads off a Folder."""
-
-    def __init__(self, third_party_id, source='adapt', is_third_party=True,
-                 parent_id=1):
-        self.third_party_id = third_party_id
-        self.third_party_source = source
-        self.is_third_party = is_third_party
-        self.parent_id = parent_id
-
-    def __str__(self):
-        return f'StubFolder({self.third_party_id})'
-
-
 class AdaptStorageTestCase(SimpleTestCase):
     """Base: a temporary directory playing the part of the mounted share."""
 
@@ -38,8 +25,8 @@ class AdaptStorageTestCase(SimpleTestCase):
         self.addCleanup(self._tmp.cleanup)
         # A non-empty mount, because an empty one is treated as a dropped mount.
         os.makedirs(os.path.join(self.mount, 'Data Management'))
-        self.root = StubFolder(adapt_storage.ROOT_SENTINEL, parent_id=None)
-        self.subfolder = StubFolder('Data Management')
+        self.root = ''
+        self.subfolder = 'Data Management'
         self.settings_patch = override_settings(
             ADAPT_MOUNT=self.mount,
             ADAPT_WRITE_ENABLED=True,
@@ -53,50 +40,44 @@ class AdaptStorageTestCase(SimpleTestCase):
 
 
 class PathResolutionTests(AdaptStorageTestCase):
+    """assert_writable takes a folder's path on the share, which arrives from a browser or a client, so it is untrusted."""
 
-    def test_root_sentinel_maps_to_the_mount_itself(self):
-        self.assertEqual(adapt_storage.folder_share_path(self.root), self.mount)
+    def test_the_empty_path_is_the_mount_itself(self):
+        self.assertEqual(adapt_storage.assert_writable(self.root), self.mount)
 
     def test_subfolder_resolves_under_the_mount(self):
         self.assertEqual(
-            adapt_storage.folder_share_path(self.subfolder),
+            adapt_storage.assert_writable(self.subfolder),
             os.path.join(self.mount, 'Data Management'),
         )
 
     def test_backslashes_are_accepted_as_separators(self):
-        folder = StubFolder('Data Management\\Fields')
+        os.makedirs(os.path.join(self.mount, 'Data Management', 'Fields'))
         self.assertEqual(
-            adapt_storage.folder_share_path(folder),
+            adapt_storage.assert_writable('Data Management\\Fields'),
             os.path.join(self.mount, 'Data Management', 'Fields'),
         )
 
     def test_traversal_out_of_the_mount_is_refused(self):
-        # third_party_id is editable in Django admin, so it is untrusted input.
-        folder = StubFolder('../../etc')
-        with self.assertRaises(AdaptWriteError):
-            adapt_storage.folder_share_path(folder)
+        for rel in ('../../etc', 'Data Management/../..', '..'):
+            with self.subTest(rel=rel), self.assertRaises(AdaptWriteError):
+                adapt_storage.assert_writable(rel)
 
     def test_absolute_path_cannot_escape_the_mount(self):
-        folder = StubFolder('/etc/passwd')
-        with self.assertRaises(AdaptWriteError):
-            adapt_storage.folder_share_path(folder)
+        for rel in ('/etc', 'C:/Windows'):
+            with self.subTest(rel=rel), self.assertRaises(AdaptWriteError):
+                adapt_storage.assert_writable(rel)
 
     def test_symlink_out_of_the_mount_is_refused(self):
         os.symlink('/etc', os.path.join(self.mount, 'escape'))
         with self.assertRaises(AdaptWriteError):
-            adapt_storage.folder_share_path(StubFolder('escape'))
+            adapt_storage.assert_writable('escape')
 
-    def test_nested_folder_with_no_recorded_path_is_refused(self):
-        # Otherwise it resolves to the share root and uploads land at the top of
-        # the warehouse instead of inside the folder the user chose.
-        with self.assertRaises(AdaptWriteError):
-            adapt_storage.folder_share_path(StubFolder('', parent_id=1))
-
-    def test_non_adapt_folder_is_refused(self):
-        with self.assertRaises(AdaptWriteError):
-            adapt_storage.folder_share_path(StubFolder('x', is_third_party=False))
-        with self.assertRaises(AdaptWriteError):
-            adapt_storage.folder_share_path(StubFolder('x', source='realm5'))
+    def test_a_file_or_a_missing_folder_is_refused(self):
+        open(os.path.join(self.mount, 'Data Management', 'a.txt'), 'wb').close()
+        for rel in ('Data Management/a.txt', 'Data Management/Nope'):
+            with self.subTest(rel=rel), self.assertRaises(AdaptWriteError):
+                adapt_storage.assert_writable(rel)
 
 
 class NameValidationTests(AdaptStorageTestCase):
@@ -211,6 +192,20 @@ class FolderCreationTests(AdaptStorageTestCase):
         os.mkdir(os.path.join(self.mount, 'v1.2'))
         names = list(adapt_storage._candidate_names('v1.2', is_dir=True))
         self.assertEqual(names[1], 'v1.2_1')
+
+    def test_a_new_folder_never_reuses_a_taken_name(self):
+        os.mkdir(os.path.join(self.mount, 'Data Management', 'Plots'))
+        self.assertEqual(adapt_storage.make_folder(self.subfolder, 'Plots'), 'Data Management/Plots_1')
+
+    def test_merging_reuses_an_existing_folder_and_makes_a_missing_one(self):
+        os.mkdir(os.path.join(self.mount, 'Data Management', 'Plots'))
+        self.assertEqual(adapt_storage.merge_folder(self.subfolder, 'Plots'), ('Data Management/Plots', False))
+        self.assertEqual(adapt_storage.merge_folder(self.subfolder, 'North'), ('Data Management/North', True))
+        self.assertTrue(os.path.isdir(os.path.join(self.mount, 'Data Management', 'North')))
+
+    def test_merging_never_writes_into_a_file(self):
+        open(os.path.join(self.mount, 'Data Management', 'Plots'), 'wb').close()
+        self.assertEqual(adapt_storage.merge_folder(self.subfolder, 'Plots'), ('Data Management/Plots_1', True))
 
 
 class RelativePathTests(AdaptStorageTestCase):
