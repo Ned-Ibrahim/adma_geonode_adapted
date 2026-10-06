@@ -17,6 +17,7 @@ the spelling the share itself uses.
 import os
 
 from django.conf import settings
+from django.urls import reverse
 
 # Directory names never shown, wherever they appear: ADMA's own storage on the
 # share and Windows system folders.
@@ -167,3 +168,13 @@ def is_folder(rel):
         return os.path.isdir(resolve(rel))
     except AdaptPathError:
         return False
+
+
+def folder_url(rel):
+    """The page that lists folder `rel` on the share."""
+    return reverse('filemanager:adapt_folder', args=[rel]) if rel else reverse('filemanager:adapt_root')
+
+
+def file_url(rel):
+    """The address that opens file `rel` on the share: it makes the file's record and shows its page."""
+    return reverse('filemanager:adapt_open', args=[rel])

@@ -1,5 +1,6 @@
 from django.urls import path
 from django.views.generic import RedirectView
+from . import adapt_views
 from . import views
 from . import map_views
 
@@ -26,6 +27,11 @@ urlpatterns = [
     path('file/<uuid:file_id>/', views.file_detail, name='file_detail'),
     path('file/<uuid:file_id>/download/', views.download_file, name='download_file'),
     path('file/<uuid:file_id>/map/', views.map_viewer, name='map_viewer'),
+
+    # The ADAPT share, by path (see adapt_share.folder_url and file_url)
+    path('adapt/', adapt_views.adapt_folder, name='adapt_root'),
+    path('adapt/browse/<path:rel>/', adapt_views.adapt_folder, name='adapt_folder'),
+    path('adapt/open/<path:rel>', adapt_views.adapt_open, name='adapt_open'),
     
     # Public map viewer
     path('public/file/<uuid:file_id>/map/', views.public_map_viewer, name='public_map_viewer'),
