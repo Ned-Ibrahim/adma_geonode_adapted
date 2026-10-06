@@ -12,7 +12,7 @@ from django.core.paginator import Paginator
 from django.http import Http404
 from django.shortcuts import redirect, render
 
-from . import adapt_share, adapt_storage, permissions
+from . import adapt_records, adapt_share, adapt_storage, permissions
 from .models import File, Folder
 
 PAGE_SIZE = 100
@@ -122,4 +122,16 @@ def adapt_folder(request, rel=''):
 
 @login_required
 def adapt_open(request, rel):
-    raise Http404('Not built yet')
+    """Open file `rel` on the share: make its record if it has none yet, then show its file page.
+
+    Anything the user may not read, or that is not a file ADMA shows, is a 404,
+    so a refused path looks exactly like a missing one.
+    """
+    try:
+        rel = adapt_share.normalize(rel)
+        if not permissions.can_read_path(request.user, rel, is_dir=False):
+            raise Http404('File not found')
+        record = adapt_records.record_for(rel)
+    except adapt_share.AdaptPathError:
+        raise Http404('File not found')
+    return redirect('filemanager:file_detail', file_id=record.id)

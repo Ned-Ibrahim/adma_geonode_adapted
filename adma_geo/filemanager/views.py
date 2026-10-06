@@ -8,7 +8,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import PasswordChangeView
 from django.contrib import messages
 from django.views.generic import CreateView, TemplateView
-from django.http import JsonResponse, HttpResponse, Http404, FileResponse
+from django.http import JsonResponse, HttpResponse, HttpResponseNotFound, Http404, FileResponse
 from django.db.models import Q, Count, Sum
 from django.urls import reverse_lazy
 from django.conf import settings
@@ -18,7 +18,7 @@ from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
 from .forms import FolderForm, FileUploadForm, NewPasswordChangeForm
 from .tasks import process_gis_file_task
-from . import adapt_share, adapt_storage, adapt_views, permissions
+from . import adapt_records, adapt_share, adapt_storage, adapt_views, permissions
 
 def get_robust_user_statistics(user):
     """
@@ -962,13 +962,26 @@ def file_detail(request, file_id):
     if not permissions.can_read(request.user, file_obj):
         messages.error(request, "You don't have permission to view this file.")
         return redirect('filemanager:dashboard')
-    
+
+    # An ADAPT record sits on the share by its path rather than in a Folder, and
+    # outlives its file there: a file gone from the share has nothing to preview.
+    adapt_rel = adapt_records.path_of(file_obj)
+    adapt_gone = adapt_records.is_gone(file_obj)
+    adapt_crumbs = adapt_folder_name = adapt_folder_url = None
+    if adapt_rel is not None:
+        adapt_crumbs = [('ADAPT', adapt_share.folder_url(''))] + [
+            (name, adapt_share.folder_url(path))
+            for name, path in adapt_share.breadcrumbs(adapt_share.parent(adapt_rel))
+        ]
+        adapt_folder_name, adapt_folder_url = adapt_crumbs[-1]
+    preview_type = None if adapt_gone else file_obj.file_type
+
     # For text files, read content for preview
     file_content = None
     csv_data = None
     csv_headers = None
     
-    if file_obj.file_type == 'text' and file_obj.file_size < 1024 * 1024:  # Max 1MB for preview
+    if preview_type == 'text' and file_obj.file_size < 1024 * 1024:  # Max 1MB for preview
         try:
             with file_obj.open_content('r') as f:
                 file_content = f.read()
@@ -976,7 +989,7 @@ def file_detail(request, file_id):
             file_content = None
     
     # For CSV files, parse data for table view and visualization
-    elif file_obj.file_type == 'csv' and file_obj.file_size < 5 * 1024 * 1024:  # Max 5MB for CSV
+    elif preview_type == 'csv' and file_obj.file_size < 5 * 1024 * 1024:  # Max 5MB for CSV
         import csv
         try:
             with file_obj.open_content('r') as f:
@@ -996,7 +1009,7 @@ def file_detail(request, file_id):
             csv_headers = None
     
     # For spreadsheet files (Excel), parse data for table view and visualization
-    elif file_obj.file_type == 'spreadsheet' and file_obj.file_size < 10 * 1024 * 1024:  # Max 10MB for Excel
+    elif preview_type == 'spreadsheet' and file_obj.file_size < 10 * 1024 * 1024:  # Max 10MB for Excel
         try:
             import pandas as pd
             # Read Excel file using pandas
@@ -1096,6 +1109,10 @@ def file_detail(request, file_id):
         'is_realm5_all': is_realm5_all,
         'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
         'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
+        'adapt_crumbs': adapt_crumbs,
+        'adapt_folder_name': adapt_folder_name,
+        'adapt_folder_url': adapt_folder_url,
+        'adapt_gone': adapt_gone,
     })
 
 def public_file_detail(request, file_id):
@@ -1383,6 +1400,8 @@ def download_file(request, file_id):
     # Check permissions
     if not permissions.can_read(request.user, file_obj):
         raise Http404("File not found")
+    if adapt_records.is_gone(file_obj):
+        return HttpResponseNotFound(adapt_records.GONE_MESSAGE, content_type='text/plain; charset=utf-8')
     
     # Referenced files have no media URL, so previews come back through this view
     # asking for inline disposition instead of a download.
