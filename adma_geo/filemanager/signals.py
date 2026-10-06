@@ -13,7 +13,8 @@ import logging
 
 from rest_framework.authtoken.models import Token
 
-from .models import MapLayer, File, Folder, Map
+from .adapt_storage import is_adapt_folder
+from .models import MapLayer, File, Folder
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,13 @@ def remember_folder_path_before_save(sender, instance, **kwargs):
 
 @receiver(post_save, sender=Folder)
 def sync_folder_directory(sender, instance, created, **kwargs):
-    """Create the folder's directory, or move it when the folder is renamed."""
+    """Create the folder's directory, or move it when the folder is renamed.
+
+    ADAPT folders are directories on the share, not under MEDIA_ROOT, so they
+    get none.
+    """
+    if is_adapt_folder(instance):
+        return
     try:
         new_dir = _folder_dir(instance.get_full_path())
 

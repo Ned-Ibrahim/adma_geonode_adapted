@@ -3122,7 +3122,7 @@ def rename_file(request):
         
         # Renames are not written through to the share, so allowing one would
         # leave the name in ADMA and the name on the warehouse disagreeing, and
-        # the next sync_adapt would list the file again under its real name.
+        # the folder page, which lists the share itself, would show the old name.
         if file_obj.is_third_party and file_obj.third_party_source == 'adapt':
             return JsonResponse({
                 'success': False,

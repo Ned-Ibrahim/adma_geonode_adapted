@@ -2,7 +2,7 @@
 
 ADMA stops keeping a Folder row for every directory on the share, so a grant
 has to name its folder in a way that does not depend on one. Each grant's path
-is the chain of folder names below the ADAPT root, as sync_adapt copied them
+is the chain of folder names below the ADAPT root, as the old share sync copied them
 from the share; a grant on the root itself becomes "", the whole share.
 """
 from django.db import migrations, models
