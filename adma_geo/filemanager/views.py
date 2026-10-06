@@ -1,22 +1,19 @@
 import json
-import magic
 import os
-from pathlib import Path
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import PasswordChangeView
 from django.contrib import messages
-from django.views.generic import CreateView, TemplateView
+from django.views.generic import TemplateView
 from django.http import JsonResponse, HttpResponse, HttpResponseNotFound, Http404, FileResponse
 from django.db.models import Q, Count, Sum
 from django.urls import reverse_lazy
-from django.conf import settings
 from django.contrib.staticfiles import finders
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
-from .forms import FolderForm, FileUploadForm, NewPasswordChangeForm
+from .forms import NewPasswordChangeForm
 from .tasks import process_gis_file_task
 from . import adapt_records, adapt_share, adapt_storage, adapt_views, permissions
 
@@ -1951,19 +1948,6 @@ def upload_folders(request):
             # Check if any folders were renamed
             renamed_folders = [f"{orig} → {unique}" for orig, unique in root_folders.items() if orig != unique]
             
-            # Trigger recursive embedding generation for root folders
-            # This will generate embeddings for all subfolders and files recursively
-            for folder_path, folder_obj in created_folders.items():
-                # Only trigger for root folders (no parent or parent is the specified parent folder)
-                if folder_obj.parent == parent_folder:
-                    try:
-                        from .tasks import generate_recursive_embeddings_task
-                        generate_recursive_embeddings_task.delay(str(folder_obj.id))
-                    except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.error(f"Failed to trigger recursive embeddings for folder {folder_obj.name}: {e}")
-            
             message = f'Successfully uploaded {files_created} files in {folders_created} folders'
             if renamed_folders:
                 message += f'. Renamed duplicate folders: {", ".join(renamed_folders)}'
@@ -2826,11 +2810,8 @@ def run_seeding_tool(request):
             return JsonResponse({'success': False, 'error': 'Permission denied'}, status=403)
         
         # Validate output folder if provided
-        if output_folder_id:
-            try:
-                output_folder = Folder.objects.get(id=output_folder_id, owner=request.user)
-            except Folder.DoesNotExist:
-                return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
+        if output_folder_id and not Folder.objects.filter(id=output_folder_id, owner=request.user).exists():
+            return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
         
         # Validate file type
         file_ext = os.path.splitext(file_obj.name)[1].lower()
@@ -2936,11 +2917,8 @@ def run_shape_to_json(request):
             return JsonResponse({'success': False, 'error': 'Permission denied'}, status=403)
         
         # Validate output folder if provided
-        if output_folder_id:
-            try:
-                output_folder = Folder.objects.get(id=output_folder_id, owner=request.user)
-            except Folder.DoesNotExist:
-                return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
+        if output_folder_id and not Folder.objects.filter(id=output_folder_id, owner=request.user).exists():
+            return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
         
         # Validate file type
         file_ext = os.path.splitext(file_obj.name)[1].lower()
@@ -3107,11 +3085,8 @@ def run_si_tool(request):
                 return JsonResponse({'success': False, 'error': 'Indicator block file not found'}, status=404)
         
         # Validate output folder if provided
-        if output_folder_id:
-            try:
-                output_folder = Folder.objects.get(id=output_folder_id, owner=request.user)
-            except Folder.DoesNotExist:
-                return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
+        if output_folder_id and not Folder.objects.filter(id=output_folder_id, owner=request.user).exists():
+            return JsonResponse({'success': False, 'error': 'Output folder not found'}, status=404)
         
         # Trigger the Celery task
         from .tasks import run_si_tool_task
