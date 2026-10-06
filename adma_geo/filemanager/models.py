@@ -319,22 +319,26 @@ class File(models.Model):
             if not self.geoserver_workspace:
                 self.geoserver_workspace = getattr(settings, 'GEOSERVER_WORKSPACE', 'adma_geo')
 
-        # Determine file type for display and processing
+        self.file_type = self.file_type_for(filename)
+
+    @staticmethod
+    def file_type_for(filename):
+        """The file_type for a file named `filename`: 'csv', 'spreadsheet', 'gis', 'image', 'text', 'document' or 'other'."""
+        file_ext = Path(filename).suffix.lower()
         if file_ext == '.csv':
-            self.file_type = 'csv'
-        elif file_ext in ['.xlsx', '.xls']:
-            self.file_type = 'spreadsheet'
-        elif (file_ext in getattr(settings, 'GIS_FILE_EXTENSIONS', [])
-              or file_ext in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', [])):
-            self.file_type = 'gis'
-        elif file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
-            self.file_type = 'image'
-        elif file_ext in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml']:
-            self.file_type = 'text'
-        elif file_ext in ['.pdf', '.doc', '.docx', '.ppt', '.pptx']:
-            self.file_type = 'document'
-        else:
-            self.file_type = 'other'
+            return 'csv'
+        if file_ext in ['.xlsx', '.xls']:
+            return 'spreadsheet'
+        if (file_ext in getattr(settings, 'GIS_FILE_EXTENSIONS', [])
+                or file_ext in getattr(settings, 'ALL_SPATIAL_EXTENSIONS', [])):
+            return 'gis'
+        if file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+            return 'image'
+        if file_ext in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml']:
+            return 'text'
+        if file_ext in ['.pdf', '.doc', '.docx', '.ppt', '.pptx']:
+            return 'document'
+        return 'other'
 
     def save(self, *args, **kwargs):
         if self.file:
@@ -1174,3 +1178,69 @@ def must_change_password(user):
         return user.profile.must_change_password
     except UserProfile.DoesNotExist:
         return False
+
+
+class AdaptEntry(models.Model):
+    """A folder or file on the ADAPT share, as the last index run found it.
+
+    ADMA lists folders straight from the share. The index is only for what
+    needs the whole share at once: search, and the totals shown beside a
+    folder. It can be up to a day old, and it is rebuilt from the share by
+    filemanager.adapt_index, so nothing may point at these rows.
+
+    `path` is spelled as the share spells it (see filemanager.adapt_share);
+    `key` and `parent_key` are the same path without case, for comparing. The
+    share itself has no row: its totals are on the AdaptIndexRun.
+    """
+    path = models.CharField(max_length=1024)
+    key = models.CharField(max_length=1024)
+    parent_key = models.CharField(max_length=1024)
+    name = models.CharField(max_length=255)
+    is_dir = models.BooleanField()
+    size = models.BigIntegerField(default=0, help_text='Size of a file in bytes; 0 for a folder.')
+    mtime = models.DateTimeField(null=True, blank=True)
+    file_type = models.CharField(max_length=50, blank=True)  # as File.file_type; blank for a folder
+    # Folder totals, zero for a file: what is directly inside, then everything beneath.
+    subfolder_count = models.IntegerField(default=0)
+    file_count = models.IntegerField(default=0)
+    total_files = models.IntegerField(default=0)
+    total_size = models.BigIntegerField(default=0)
+    indexed_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['key'], name='adaptentry_unique_key'),
+        ]
+        indexes = [
+            # For "everything beneath this folder": key LIKE 'soils/%' outside the C locale.
+            models.Index(fields=['key'], name='adaptentry_key_prefix', opclasses=['varchar_pattern_ops']),
+            models.Index(fields=['parent_key'], name='adaptentry_parent_key'),
+        ]
+
+    def __str__(self):
+        return self.path
+
+
+class AdaptIndexRun(models.Model):
+    """One rebuild of the ADAPT index, with what it found.
+
+    finished_at stays empty until the run completes. The share's own totals
+    live here, since the share has no AdaptEntry row. failed_folders lists the
+    folders that could not be read, one path per line; their old rows are kept.
+    """
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+    folders = models.IntegerField(default=0)
+    files = models.IntegerField(default=0)
+    total_size = models.BigIntegerField(default=0)
+    root_subfolders = models.IntegerField(default=0)
+    root_files = models.IntegerField(default=0)
+    errors = models.IntegerField(default=0)
+    failed_folders = models.TextField(blank=True)
+    removed = models.IntegerField(default=0, help_text='Rows dropped because their path is gone from the share.')
+
+    class Meta:
+        get_latest_by = 'started_at'
+
+    def __str__(self):
+        return f'ADAPT index run {self.started_at:%Y-%m-%d %H:%M}'
