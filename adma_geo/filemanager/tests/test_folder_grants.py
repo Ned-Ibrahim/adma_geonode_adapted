@@ -172,21 +172,12 @@ class PermissionRules(GrantTree):
 
 class WebPages(GrantTree):
 
-    def test_the_root_lists_only_the_granted_branch_and_no_files(self):
+    def test_old_links_to_granted_folders_go_to_their_path(self):
+        # The pages themselves are tested in test_adapt_browse.
         self.client.force_login(self.alice)
-        response = self.client.get(f'/folder/{self.root.id}/')
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Soils')
-        self.assertNotContains(response, 'Grazing Systems')
-        self.assertNotContains(response, 'Flux Measurements')
-        self.assertNotContains(response, 'share_readme.txt')
-
-    def test_a_granted_folder_lists_its_files(self):
-        self.client.force_login(self.alice)
-        response = self.client.get(f'/folder/{self.soils.id}/')
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'soil_cores.csv')
-        self.assertContains(response, '2024')
+        for folder, url in ((self.root, '/adapt/'), (self.soils, '/adapt/browse/Soils/')):
+            with self.subTest(folder=folder.name):
+                self.assertRedirects(self.client.get(f'/folder/{folder.id}/'), url, fetch_redirect_response=False)
 
     def test_an_ungranted_folder_redirects_to_the_dashboard(self):
         self.client.force_login(self.alice)
@@ -201,9 +192,9 @@ class WebPages(GrantTree):
 
     def test_the_dashboard_shows_adapt_only_to_granted_users(self):
         self.client.force_login(self.bob)
-        self.assertNotContains(self.client.get('/dashboard/'), f'/folder/{self.root.id}/')
+        self.assertNotContains(self.client.get('/dashboard/'), "window.location.href='/adapt/'")
         self.client.force_login(self.alice)
-        self.assertContains(self.client.get('/dashboard/'), f'/folder/{self.root.id}/')
+        self.assertContains(self.client.get('/dashboard/'), "window.location.href='/adapt/'")
 
     def test_public_pages_never_serve_adapt_rows(self):
         Folder.objects.filter(pk=self.grazing.pk).update(is_public=True)

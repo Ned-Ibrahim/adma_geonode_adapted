@@ -14,9 +14,12 @@ The share is a Windows share, so names compare without case: key() is the form
 to compare, normalize() keeps the spelling it was given, and canonical() finds
 the spelling the share itself uses.
 """
+import hashlib
 import os
+from collections import namedtuple
 
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 
 # Directory names never shown, wherever they appear: ADMA's own storage on the
@@ -129,14 +132,16 @@ def contained(path, root):
 def resolve(rel):
     """The absolute path of `rel` on the mount, or AdaptPathError if it would land outside it.
 
-    Symlinks are followed before the check, so a link on the share that points
-    out of it is refused rather than served.
+    A path through a symlink is refused, wherever the link points. One that
+    leads out of the share would serve what is not on it, and one that stays
+    inside would let a grant on the folder holding the link reach the folder
+    it points to. Listings leave links out for the same reason.
     """
     rel = normalize(rel)
     root = mount_root()
-    path = os.path.realpath(os.path.join(root, *rel.split('/'))) if rel else root
-    if not contained(path, root):
-        raise AdaptPathError(f'Refusing "{rel}": it resolves outside the ADAPT share')
+    path = os.path.join(root, *rel.split('/')) if rel else root
+    if os.path.realpath(path) != path or not contained(path, root):
+        raise AdaptPathError(f'Refusing "{rel}": it passes through a link or leads outside the ADAPT share')
     return path
 
 
@@ -178,3 +183,73 @@ def folder_url(rel):
 def file_url(rel):
     """The address that opens file `rel` on the share: it makes the file's record and shows its page."""
     return reverse('filemanager:adapt_open', args=[rel])
+
+
+# ------------------------------------------------------------------ listings
+
+Entry = namedtuple('Entry', 'name is_dir')
+
+# How long a folder's listing is reused without reading it again, in seconds.
+# A change to the folder's mtime makes it stale sooner.
+LISTING_SECONDS = 60
+
+
+def _shown(name, is_dir):
+    """Whether a name found on the share is listed: not hidden, and one normalize() would accept."""
+    return not (is_hidden(name, is_dir) or ':' in name or '\\' in name or any(ord(ch) < 32 for ch in name))
+
+
+def _listing_key(rel):
+    # Hashed, as paths are long and hold spaces; the mount is part of the key so
+    # two mounts never share a listing.
+    raw = '\0'.join((mount_root(), *key(rel)))
+    return 'adapt-listing:' + hashlib.sha256(raw.encode('utf-8', 'surrogateescape')).hexdigest()
+
+
+def list_folder(rel):
+    """[Entry(name, is_dir)] for folder `rel`: folders first, then files, each by name without case.
+
+    Hidden and excluded names and symlinks are left out. AdaptPathError if
+    `rel` is refused or is not a folder on the share.
+
+    The listing is cached for LISTING_SECONDS and reused only while the
+    folder's mtime is unchanged, so paging through a folder of thousands of
+    files reads it once. Call forget_listing() after ADMA writes into it.
+    """
+    rel = normalize(rel)
+    path = resolve(rel)
+    try:
+        mtime = os.stat(path).st_mtime_ns
+    except OSError:
+        raise AdaptPathError(f'"{rel or "/"}" is not on the ADAPT share')
+    cache_key = _listing_key(rel)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    entries = []
+    try:
+        with os.scandir(path) as found:
+            for item in found:
+                try:
+                    if item.is_symlink():
+                        continue
+                    is_dir = item.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if _shown(item.name, is_dir):
+                    entries.append(Entry(item.name, is_dir))
+    except NotADirectoryError:
+        raise AdaptPathError(f'"{rel}" is not a folder on the ADAPT share')
+    except OSError as exc:
+        raise AdaptPathError(f'Cannot read "{rel or "/"}" on the ADAPT share: {exc.strerror}')
+    entries.sort(key=lambda e: (not e.is_dir, e.name.casefold(), e.name))
+    cache.set(cache_key, (mtime, entries), LISTING_SECONDS)
+    return entries
+
+
+def forget_listing(rel):
+    """Drop the cached listing of folder `rel`, for after ADMA writes into it. Any spelling of the path works."""
+    try:
+        cache.delete(_listing_key(normalize(rel)))
+    except AdaptPathError:
+        pass

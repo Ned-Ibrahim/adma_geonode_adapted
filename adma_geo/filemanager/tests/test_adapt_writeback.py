@@ -159,7 +159,7 @@ class UploadGate(WriteBackCase):
     def test_other_readers_of_the_folder_see_the_upload(self):
         self.upload(self.writer, self.soils, 'field.csv')
         self.client.force_login(self.reader)
-        page = self.client.get(reverse('filemanager:folder_detail', args=[self.soils.id]))
+        page = self.client.get(reverse('filemanager:folder_detail', args=[self.soils.id]), follow=True)
         self.assertContains(page, 'field.csv')
         row = File.objects.get(name='field.csv')
         download = self.client.get(reverse('filemanager:download_file', args=[row.id]))
@@ -478,11 +478,11 @@ class SyncAfterWrite(WriteBackCase):
 
 
 class UploadControls(WriteBackCase):
-    """The folder page offers upload only where it would be accepted."""
+    """The folder page offers upload only where it would be accepted. Old folder links lead to it."""
 
     def page(self, user, folder):
         self.client.force_login(user)
-        return self.client.get(reverse('filemanager:folder_detail', args=[folder.id]))
+        return self.client.get(reverse('filemanager:folder_detail', args=[folder.id]), follow=True)
 
     def test_a_writer_sees_the_upload_controls(self):
         page = self.page(self.writer, self.soils)

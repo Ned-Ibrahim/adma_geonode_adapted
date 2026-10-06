@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -207,6 +208,26 @@ ADAPT_WRITABLE_PREFIXES = [
     for p in os.environ.get('ADAPT_WRITABLE_PREFIXES', '').split(',')
     if p.strip()
 ]
+
+# The cache holds short-lived listings of ADAPT folders (adapt_share.list_folder),
+# so paging through a folder of thousands of files does not rescan it per page.
+# Redis database 1 shares them between workers and keeps them apart from
+# Celery's database 0. Without REDIS_URL, and always under "manage.py test",
+# each process keeps its own in memory.
+if os.environ.get('REDIS_URL') and sys.argv[1:2] != ['test']:
+    from urllib.parse import urlsplit, urlunsplit
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': urlunsplit(urlsplit(os.environ['REDIS_URL'])._replace(path='/1')),
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        }
+    }
 
 # Proxy Settings for HTTPS detection
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

@@ -18,7 +18,7 @@ from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
 from .forms import FolderForm, FileUploadForm, NewPasswordChangeForm
 from .tasks import process_gis_file_task
-from . import adapt_storage, permissions
+from . import adapt_share, adapt_storage, adapt_views, permissions
 
 def get_robust_user_statistics(user):
     """
@@ -427,18 +427,22 @@ def dashboard(request):
     # Get third-party data visible to the current user:
     # - User's own third-party folders/files
     # - Public third-party folders/files from other users
-    # - ADAPT roots only through a FolderGrant (see permissions), never by owner or is_public
+    # - ADAPT as one entry, only through a FolderGrant (see permissions), never by owner or is_public
     third_party_folders = Folder.objects.filter(
         is_third_party=True,
         deletion_in_progress=False,
         parent=None  # Only top-level third-party folders
     ).filter(
         Q(owner=user) | Q(is_public=True)  # User's own OR public
-    ).exclude(third_party_source='adapt')
-    adapt_root_ids = [f.pk for f in permissions.readable_adapt_roots(user)]
-    third_party_folders = Folder.objects.filter(
-        Q(pk__in=third_party_folders.values_list('pk', flat=True)) | Q(pk__in=adapt_root_ids)
-    ).distinct().order_by('third_party_source', 'name')
+    ).exclude(third_party_source='adapt').order_by('third_party_source', 'name')
+    adapt_entry = None
+    if permissions.can_read_path(user, ''):
+        # The share is listed live at /adapt/; counts come from the search index when there is one.
+        index = adapt_views.index_module()
+        adapt_entry = {
+            'url': adapt_share.folder_url(''),
+            'summary': Folder.describe_contents(*index.visible_totals(user, '')) if index else '',
+        }
     
     third_party_files = File.objects.filter(
         is_third_party=True,
@@ -461,7 +465,8 @@ def dashboard(request):
         # Third-party data panel
         'third_party_folders': third_party_folders,
         'third_party_files': third_party_files,
-        'total_third_party_folders': third_party_folders.count(),
+        'adapt_entry': adapt_entry,
+        'total_third_party_folders': third_party_folders.count() + (1 if adapt_entry else 0),
         'total_third_party_files': third_party_files.count(),
     })
 
@@ -474,6 +479,9 @@ def folder_detail(request, folder_id):
     if not permissions.can_read(request.user, folder):
         messages.error(request, "You don't have permission to view this folder.")
         return redirect('filemanager:dashboard')
+    if adapt_storage.is_adapt_folder(folder):
+        # The share is listed live by path; an old link to a folder row goes there.
+        return redirect(adapt_share.folder_url(permissions.adapt_path(folder)))
     
     # Get subfolders and files with pagination (exclude items being deleted)
     subfolders_queryset = folder.subfolders.filter(deletion_in_progress=False).order_by('name')

@@ -2,13 +2,14 @@
 
 A user granted one branch of ADAPT opens the root to navigate down, but the
 root's full size (thousands of folders, a million files) is not theirs to know.
+
+The dashboard and the folder pages take ADAPT counts from the search index
+(see test_adapt_browse); search results still count the catalogue rows here.
 """
 from django.contrib.auth import get_user_model
-from django.db import connection
 from django.test import TestCase
-from django.test.utils import CaptureQueriesContext
 
-from filemanager.models import File, Folder, FolderGrant
+from filemanager.models import File, Folder
 
 from .test_folder_grants import adapt_file, adapt_folder, grant_on
 
@@ -41,68 +42,7 @@ class VisibleCountsTree(TestCase):
         return self.client.get('/dashboard/').content.decode()
 
 
-class DashboardRow(VisibleCountsTree):
-
-    def test_a_user_granted_one_branch_sees_only_that_branch_in_the_adapt_row(self):
-        grant_on(self.soils, user=self.alice)
-        self.login(self.alice)
-        page = self.dashboard()
-        self.assertIn('1 folder, 70 files', page)
-        self.assertNotIn('4 folders', page)
-        self.assertNotIn('1000 files', page)
-
-    def test_a_grant_two_levels_down_counts_only_the_granted_subtree(self):
-        grant_on(self.soils_2024, user=self.alice)
-        self.login(self.alice)
-        self.assertIn('1 folder, 40 files', self.dashboard())
-
-    def test_grants_nested_inside_another_grant_are_not_counted_twice(self):
-        grant_on(self.soils, user=self.alice)
-        grant_on(self.soils_2024, user=self.alice)
-        self.login(self.alice)
-        self.assertIn('1 folder, 70 files', self.dashboard())
-
-    def test_a_grant_on_the_root_shows_the_whole_share(self):
-        grant_on(self.root, user=self.alice)
-        self.login(self.alice)
-        self.assertIn('4 folders, 1000 files', self.dashboard())
-
-    def test_superusers_see_the_whole_share(self):
-        self.login(self.admin)
-        self.assertIn('4 folders, 1000 files', self.dashboard())
-
-    def test_the_row_costs_the_same_queries_however_big_the_tree(self):
-        grant_on(self.soils_2024, user=self.alice)
-        self.login(self.alice)
-
-        def queries():
-            with CaptureQueriesContext(connection) as ctx:
-                self.dashboard()
-            return len(ctx.captured_queries)
-
-        before = queries()
-        for i in range(30):
-            adapt_folder(f'Extra {i}', self.root, self.sync)
-            adapt_folder(f'Extra {i} child', self.soils, self.sync)
-        self.assertEqual(queries(), before)
-
-
-class FolderPageRows(VisibleCountsTree):
-
-    def test_a_folder_on_the_way_to_a_grant_shows_only_the_way_down(self):
-        grant_on(self.soils_2024, user=self.alice)
-        self.login(self.alice)
-        page = self.client.get(f'/folder/{self.root.pk}/').content.decode()
-        # The Soils row: one visible subfolder (2024), none of the files beside it.
-        self.assertRegex(page, r'0 files • 1 folder\s*<')
-        self.assertNotIn('2 folders', page)
-
-    def test_a_granted_folder_shows_its_real_counts(self):
-        grant_on(self.soils, user=self.alice)
-        self.login(self.alice)
-        page = self.client.get(f'/folder/{self.root.pk}/').content.decode()
-        self.assertRegex(page, r'1 file • 2 folders\s*<')
-
+class SearchRows(VisibleCountsTree):
 
     def test_search_results_count_only_the_way_down(self):
         grant_on(self.soils_2024, user=self.alice)
@@ -114,16 +54,6 @@ class FolderPageRows(VisibleCountsTree):
 
 
 class Pluralization(VisibleCountsTree):
-
-    def test_one_folder_is_not_called_folders(self):
-        grant_on(self.soils, user=self.alice)
-        self.login(self.alice)
-        page = self.dashboard()
-        self.assertIn('>1 folder, 0 files<', page)
-        self.assertNotIn('1 folders', page)
-        page = self.client.get(f'/folder/{self.root.pk}/').content.decode()
-        self.assertIn('(1 folder, 0 files)', page)
-        self.assertNotIn('1 folders', page)
 
     def test_own_folders_count_files_in_the_singular(self):
         mine = Folder.objects.create(name='Mine', owner=self.alice)

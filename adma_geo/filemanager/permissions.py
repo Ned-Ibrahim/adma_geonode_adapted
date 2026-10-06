@@ -220,14 +220,6 @@ def filter_readable(user, objects: Iterable) -> List:
     return [obj for obj in objects if can_read(user, obj)]
 
 
-def readable_adapt_roots(user) -> List[Folder]:
-    """Top-level ADAPT folders the user may open. Used by the dashboard's third-party panel."""
-    roots = Folder.objects.filter(
-        is_third_party=True, third_party_source='adapt', parent__isnull=True, deletion_in_progress=False,
-    )
-    return filter_readable(user, roots)
-
-
 def adapt_folder_ids(user, include_path=False) -> Set:
     """Ids of the ADAPT folders the user's read grants cover: each granted folder and its whole subtree.
 

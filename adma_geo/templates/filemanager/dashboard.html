@@ -593,7 +593,7 @@
 {% endif %}
 
 <!-- Third-Party Data Section -->
-{% if third_party_folders or third_party_files %}
+{% if third_party_folders or third_party_files or adapt_entry %}
 <div class="row mt-4">
     <div class="col-12">
         <div class="card">
@@ -631,6 +631,29 @@
                             </thead>
                             <tbody>
                                 <!-- Third-Party Folders -->
+                                {% if adapt_entry %}
+                                <tr style="cursor: pointer;" onclick="window.location.href='{{ adapt_entry.url }}'">
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-folder folder-icon me-3"></i>
+                                            <div><strong>ADAPT</strong></div>
+                                        </div>
+                                    </td>
+                                    <td><span class="text-muted">Folder</span></td>
+                                    <td><span class="text-muted">{{ adapt_entry.summary }}</span></td>
+                                    <td>
+                                        <span class="badge bg-purple" style="background-color: #6f42c1;">
+                                            <i class="fas fa-cloud me-1"></i>adapt
+                                        </span>
+                                    </td>
+                                    <td><small class="text-muted">Live</small></td>
+                                    <td>
+                                        <a class="btn btn-sm btn-outline-secondary" href="{{ adapt_entry.url }}" onclick="event.stopPropagation()" title="Open the ADAPT share">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                    </td>
+                                </tr>
+                                {% endif %}
                                 {% for folder in third_party_folders %}
                                 <tr data-folder-id="{{ folder.id }}" style="cursor: pointer;" onclick="window.location.href='{% url 'filemanager:folder_detail' folder.id %}'">
                                     <td>
@@ -732,10 +755,31 @@
                 <!-- Third-Party Data Panel View -->
                 <div id="thirdPartyPanelView" class="view-container" style="display: none;">
                     <!-- Third-Party Folders -->
-                    {% if third_party_folders %}
+                    {% if third_party_folders or adapt_entry %}
                     <div class="mb-4">
                         <h6 class="text-muted mb-3"><i class="fas fa-folder me-2"></i>Third-Party Folders</h6>
                         <div class="row">
+                            {% if adapt_entry %}
+                            <div class="col-md-4 col-sm-6 mb-3">
+                                <div class="folder-item" onclick="window.location.href='{{ adapt_entry.url }}'">
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-folder folder-icon"></i>
+                                        <div class="flex-grow-1">
+                                            <h6 class="mb-1 fw-bold">ADAPT</h6>
+                                            {% if adapt_entry.summary %}
+                                            <small class="text-muted">{{ adapt_entry.summary }}</small>
+                                            <br>
+                                            {% endif %}
+                                            <small>
+                                                <span class="badge bg-purple" style="background-color: #6f42c1;">
+                                                    <i class="fas fa-cloud me-1"></i>adapt
+                                                </span>
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
                             {% for folder in third_party_folders %}
                             <div class="col-md-4 col-sm-6 mb-3">
                                 <div class="folder-item" data-folder-id="{{ folder.id }}" onclick="window.location.href='{% url 'filemanager:folder_detail' folder.id %}'">
