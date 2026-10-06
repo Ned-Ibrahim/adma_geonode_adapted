@@ -2,7 +2,7 @@ import uuid
 from pathlib import Path
 from django.core.validators import RegexValidator
 from django.db import models
-from django.db.models.functions import Lower
+from django.db.models.functions import Lower, Upper
 # from django.contrib.gis.db import models as gis_models  # Disabled for now
 # from django.contrib.gis.geos import Point
 from django.contrib.auth import get_user_model
@@ -54,7 +54,7 @@ class Folder(models.Model):
         help_text="Name of the third-party platform (e.g., 'Google Drive', 'Dropbox', 'AWS S3')"
     )
     third_party_id = models.CharField(
-        max_length=255, 
+        max_length=1024,
         blank=True, 
         null=True,
         help_text="Unique identifier from the third-party platform"
@@ -242,13 +242,13 @@ class File(models.Model):
         help_text="Name of the third-party platform (e.g., 'Google Drive', 'Dropbox', 'AWS S3')"
     )
     third_party_id = models.CharField(
-        max_length=255, 
+        max_length=1024,
         blank=True, 
         null=True,
         help_text="Unique identifier from the third-party platform"
     )
     third_party_url = models.URLField(
-        max_length=500,
+        max_length=1024,
         blank=True,
         null=True,
         help_text="URL to the file on the third-party platform"
@@ -281,6 +281,13 @@ class File(models.Model):
     class Meta:
         unique_together = ('name', 'folder', 'owner')
         ordering = ['name']
+        indexes = [
+            # adapt_records finds the record for a file on the ADAPT share by its path, without case.
+            models.Index(
+                Upper('third_party_id'), condition=models.Q(third_party_source='adapt'),
+                name='file_adapt_path_idx',
+            ),
+        ]
 
     def __str__(self):
         return self.name
