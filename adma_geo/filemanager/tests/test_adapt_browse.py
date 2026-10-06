@@ -162,6 +162,18 @@ class BrowseCase(Mount, TestCase):
 
 class BrowsePages(BrowseCase):
 
+    def test_a_reload_reads_the_share_again(self):
+        # A share that does not update the folder's modified time when a file
+        # appears: the cached listing stays, until the user reloads the page.
+        self.get(self.admin, '/adapt/browse/Soils/')
+        folder = os.path.join(self.mount, 'Soils')
+        stamp = os.stat(folder).st_mtime_ns
+        self.touch('Soils/new.csv')
+        os.utime(folder, ns=(stamp, stamp))
+        self.assertNotIn('new.csv', self.names(self.get(self.admin, '/adapt/browse/Soils/')))
+        response = self.client.get('/adapt/browse/Soils/', HTTP_CACHE_CONTROL='max-age=0')
+        self.assertIn('new.csv', self.names(response))
+
     def test_a_reader_sees_only_their_branch_at_the_top_and_no_files(self):
         response = self.get(self.reader, '/adapt/')
         self.assertEqual(response.status_code, 200)
@@ -345,11 +357,20 @@ class DashboardEntry(BrowseCase):
         self.assertNotContains(self.get(self.stranger, '/dashboard/'), self.ENTRY)
 
     def test_counts_come_from_the_index_for_what_the_user_may_see(self):
-        with fake_index(totals=(1, 70)):
+        with fake_index(totals=(1, 70), when=datetime(2026, 10, 6, 7, 0, tzinfo=timezone.utc)):
             page = self.get(self.reader, '/dashboard/')
             visible_totals = sys.modules['filemanager.adapt_index'].visible_totals
         self.assertContains(page, '1 folder, 70 files')
         self.assertEqual(visible_totals.call_args.args[1:], ('',))
+
+    def test_before_the_first_index_run_the_entry_has_no_counts(self):
+        # The index answers (0, 0) until it has run; that is not an empty share.
+        with fake_index(totals=(0, 0), when=None):
+            page = self.get(self.reader, '/dashboard/')
+            visible_totals = sys.modules['filemanager.adapt_index'].visible_totals
+        self.assertContains(page, self.ENTRY)
+        self.assertNotContains(page, '>Empty<')
+        visible_totals.assert_not_called()
 
     def test_without_an_index_the_entry_has_no_counts(self):
         with NO_INDEX:

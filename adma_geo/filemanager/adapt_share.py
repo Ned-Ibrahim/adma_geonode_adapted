@@ -151,16 +151,19 @@ def canonical(rel):
     Each part is matched against its folder's listing, exactly first and then
     without case. For paths typed by a person or read from an export, where
     "soils/2024" should find "Soils/2024".
+
+    The listings come from list_folder(), so opening file after file in a
+    folder of thousands reads the folder once, and a name the listing leaves
+    out (hidden, excluded, a link) is not found here either.
     """
     spelled = ''
     for part in normalize(rel).split('/') if rel else ():
-        here = resolve(spelled)
-        try:
-            names = os.listdir(here)
-        except OSError:
-            raise AdaptPathError(f'"{spelled or "/"}" is not a folder on the ADAPT share')
-        found = part if part in names else next(
-            (n for n in sorted(names) if n.casefold() == part.casefold()), None)
+        names = [entry.name for entry in list_folder(spelled)]
+        if part in names:
+            found = part
+        else:
+            folded = part.casefold()
+            found = min((n for n in names if n.casefold() == folded), default=None)
         if found is None:
             raise AdaptPathError(f'"{join(spelled, part)}" is not on the ADAPT share')
         spelled = join(spelled, found)

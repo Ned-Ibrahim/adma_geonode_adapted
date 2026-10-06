@@ -5,6 +5,7 @@ A temporary directory stands in for the mount.
 import os
 import shutil
 import tempfile
+from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
@@ -82,6 +83,22 @@ class OnTheShare(SimpleTestCase):
     def test_canonical_refuses_what_is_not_there(self):
         with self.assertRaisesMessage(AdaptPathError, 'Soils/2023'):
             adapt_share.canonical('Soils/2023')
+
+    def test_canonical_reads_each_folder_once(self):
+        # Opening file after file in a big folder must not list it again each time.
+        with mock.patch('os.scandir', wraps=os.scandir) as scandir, \
+                mock.patch('os.listdir', wraps=os.listdir) as listdir:
+            adapt_share.canonical('soils/cores.csv')
+            self.assertEqual(scandir.call_count, 2)  # the share root and Soils
+            self.assertEqual(adapt_share.canonical('SOILS/CORES.CSV'), 'Soils/cores.csv')
+            self.assertEqual(adapt_share.canonical('Soils/2024'), 'Soils/2024')
+        self.assertEqual(scandir.call_count, 2)
+        listdir.assert_not_called()
+
+    def test_canonical_skips_names_the_listing_leaves_out(self):
+        open(os.path.join(self.mount, 'Soils', 'Thumbs.db'), 'w').close()
+        with self.assertRaises(AdaptPathError):
+            adapt_share.canonical('Soils/thumbs.db')
 
     def test_is_folder(self):
         self.assertTrue(adapt_share.is_folder('Soils'))

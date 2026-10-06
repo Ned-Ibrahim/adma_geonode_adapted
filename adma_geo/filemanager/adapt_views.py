@@ -56,6 +56,12 @@ class _Row:
             self.file.apply_extension_metadata(entry.name)
 
 
+def _is_reload(request):
+    """True when the browser asks for a fresh copy, as it does when the user reloads the page."""
+    asked = request.headers.get('Cache-Control', '').lower()
+    return 'no-cache' in asked or 'max-age=0' in asked
+
+
 @login_required
 def adapt_folder(request, rel=''):
     """List folder `rel` on the share, 100 entries a page, as far as the user's grants reach.
@@ -75,6 +81,10 @@ def adapt_folder(request, rel=''):
         return redirect(adapt_share.file_url(rel))
     if not permissions.can_read_path(user, rel):
         raise Http404(NOT_FOUND)
+    if _is_reload(request):
+        # Read the share again rather than trust the cached listing: not every
+        # share updates a folder's modified time when its contents change.
+        adapt_share.forget_listing(rel)
     try:
         entries = adapt_share.list_folder(rel)
     except adapt_share.AdaptPathError:
