@@ -10,7 +10,7 @@ from django.test.utils import CaptureQueriesContext
 
 from filemanager.models import File, Folder, FolderGrant
 
-from .test_folder_grants import adapt_file, adapt_folder
+from .test_folder_grants import adapt_file, adapt_folder, grant_on
 
 User = get_user_model()
 
@@ -44,7 +44,7 @@ class VisibleCountsTree(TestCase):
 class DashboardRow(VisibleCountsTree):
 
     def test_a_user_granted_one_branch_sees_only_that_branch_in_the_adapt_row(self):
-        FolderGrant.objects.create(folder=self.soils, user=self.alice)
+        grant_on(self.soils, user=self.alice)
         self.login(self.alice)
         page = self.dashboard()
         self.assertIn('1 folder, 70 files', page)
@@ -52,18 +52,18 @@ class DashboardRow(VisibleCountsTree):
         self.assertNotIn('1000 files', page)
 
     def test_a_grant_two_levels_down_counts_only_the_granted_subtree(self):
-        FolderGrant.objects.create(folder=self.soils_2024, user=self.alice)
+        grant_on(self.soils_2024, user=self.alice)
         self.login(self.alice)
         self.assertIn('1 folder, 40 files', self.dashboard())
 
     def test_grants_nested_inside_another_grant_are_not_counted_twice(self):
-        FolderGrant.objects.create(folder=self.soils, user=self.alice)
-        FolderGrant.objects.create(folder=self.soils_2024, user=self.alice)
+        grant_on(self.soils, user=self.alice)
+        grant_on(self.soils_2024, user=self.alice)
         self.login(self.alice)
         self.assertIn('1 folder, 70 files', self.dashboard())
 
     def test_a_grant_on_the_root_shows_the_whole_share(self):
-        FolderGrant.objects.create(folder=self.root, user=self.alice)
+        grant_on(self.root, user=self.alice)
         self.login(self.alice)
         self.assertIn('4 folders, 1000 files', self.dashboard())
 
@@ -72,7 +72,7 @@ class DashboardRow(VisibleCountsTree):
         self.assertIn('4 folders, 1000 files', self.dashboard())
 
     def test_the_row_costs_the_same_queries_however_big_the_tree(self):
-        FolderGrant.objects.create(folder=self.soils_2024, user=self.alice)
+        grant_on(self.soils_2024, user=self.alice)
         self.login(self.alice)
 
         def queries():
@@ -90,7 +90,7 @@ class DashboardRow(VisibleCountsTree):
 class FolderPageRows(VisibleCountsTree):
 
     def test_a_folder_on_the_way_to_a_grant_shows_only_the_way_down(self):
-        FolderGrant.objects.create(folder=self.soils_2024, user=self.alice)
+        grant_on(self.soils_2024, user=self.alice)
         self.login(self.alice)
         page = self.client.get(f'/folder/{self.root.pk}/').content.decode()
         # The Soils row: one visible subfolder (2024), none of the files beside it.
@@ -98,14 +98,14 @@ class FolderPageRows(VisibleCountsTree):
         self.assertNotIn('2 folders', page)
 
     def test_a_granted_folder_shows_its_real_counts(self):
-        FolderGrant.objects.create(folder=self.soils, user=self.alice)
+        grant_on(self.soils, user=self.alice)
         self.login(self.alice)
         page = self.client.get(f'/folder/{self.root.pk}/').content.decode()
         self.assertRegex(page, r'1 file • 2 folders\s*<')
 
 
     def test_search_results_count_only_the_way_down(self):
-        FolderGrant.objects.create(folder=self.soils_2024, user=self.alice)
+        grant_on(self.soils_2024, user=self.alice)
         self.login(self.alice)
         page = self.client.get('/search/', {'q': 'Soils'}).content.decode()
         self.assertRegex(page, r'0 files • 1 folder\s*<')
@@ -116,7 +116,7 @@ class FolderPageRows(VisibleCountsTree):
 class Pluralization(VisibleCountsTree):
 
     def test_one_folder_is_not_called_folders(self):
-        FolderGrant.objects.create(folder=self.soils, user=self.alice)
+        grant_on(self.soils, user=self.alice)
         self.login(self.alice)
         page = self.dashboard()
         self.assertIn('>1 folder, 0 files<', page)

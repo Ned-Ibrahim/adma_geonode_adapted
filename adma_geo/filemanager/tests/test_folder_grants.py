@@ -4,6 +4,9 @@ The share is mounted with one account that can read everything, so these tests
 are the whole of ADAPT access control: if they pass, a user sees exactly the
 branches granted to them and nothing beside them.
 """
+import os
+import shutil
+import tempfile
 from importlib import import_module
 from io import StringIO
 
@@ -11,7 +14,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.authtoken.models import Token
 
 from filemanager import permissions
@@ -21,10 +24,16 @@ from filemanager.search_engine import search_engine
 User = get_user_model()
 
 
+def share_path(folder, name=None):
+    """Path on the share of an ADAPT folder row, or of `name` inside it."""
+    path = permissions.adapt_path(folder)
+    return path if name is None else (f'{path}/{name}' if path else name)
+
+
 def adapt_folder(name, parent, owner, **extra):
     return Folder.objects.create(
         name=name, parent=parent, owner=owner, is_third_party=True, third_party_source='adapt',
-        third_party_id=f'adapt:{name}', **extra,
+        third_party_id=share_path(parent, name) if parent else 'adapt_root', **extra,
     )
 
 
@@ -32,8 +41,12 @@ def adapt_file(name, folder, **extra):
     # bulk_create skips File.save(), which would stat a file that does not exist.
     return File.objects.bulk_create([File(
         name=name, file=f'adapt/{name}', folder=folder, owner=folder.owner, file_size=10,
-        is_third_party=True, third_party_source='adapt', third_party_id=f'adapt:{name}', **extra,
+        is_third_party=True, third_party_source='adapt', third_party_id=share_path(folder, name), **extra,
     )])[0]
+
+
+def grant_on(folder, **kwargs):
+    return FolderGrant.objects.create(path=share_path(folder), **kwargs)
 
 
 class GrantTree(TestCase):
@@ -59,10 +72,10 @@ class GrantTree(TestCase):
         cls.grazing_file = adapt_file('paddocks.csv', cls.grazing)
         cls.flux_file = adapt_file('tower.csv', cls.flux)
 
-        FolderGrant.objects.create(folder=cls.soils, user=cls.alice)
+        grant_on(cls.soils, user=cls.alice)
         flux_team = Group.objects.create(name='flux-team')
         cls.carol.groups.add(flux_team)
-        FolderGrant.objects.create(folder=cls.flux, group=flux_team, can_write=True)
+        grant_on(cls.flux, group=flux_team, can_write=True)
 
     def fresh(self, user):
         # Grants are cached per user object, as they are per request in a view.
@@ -117,6 +130,36 @@ class PermissionRules(GrantTree):
         bob = self.fresh(self.bob)
         self.assertFalse(permissions.can_read(bob, Folder.objects.get(pk=self.grazing.pk)))
         self.assertFalse(permissions.can_read(bob, File.objects.get(pk=self.grazing_file.pk)))
+
+    def test_paths_compare_without_case(self):
+        FolderGrant.objects.create(path='grazing systems', user=self.bob)
+        self.assertTrue(permissions.can_read(self.fresh(self.bob), self.grazing_file))
+
+    def test_a_grant_on_the_whole_share_covers_everything(self):
+        FolderGrant.objects.create(path='', user=self.bob)
+        bob = self.fresh(self.bob)
+        for obj in (self.root, self.root_file, self.grazing_file, self.soils_2024_file):
+            with self.subTest(obj=obj.name):
+                self.assertTrue(permissions.can_read(bob, obj))
+
+    def test_a_grant_does_not_reach_a_sibling_with_a_longer_name(self):
+        FolderGrant.objects.create(path='Soil', user=self.bob)
+        self.assertFalse(permissions.can_read(self.fresh(self.bob), self.soils_file))
+
+    def test_a_row_recording_a_path_out_of_the_share_is_never_readable(self):
+        File.objects.filter(pk=self.soils_file.pk).update(third_party_id='Soils/../Grazing Systems/paddocks.csv')
+        self.assertFalse(permissions.can_read(self.fresh(self.alice), File.objects.get(pk=self.soils_file.pk)))
+
+    def test_by_path(self):
+        alice = self.fresh(self.alice)
+        self.assertTrue(permissions.can_read_path(alice, 'soils/2024/x.csv', is_dir=False))
+        self.assertTrue(permissions.can_read_path(alice, ''))
+        self.assertFalse(permissions.can_read_path(alice, '', is_dir=False))
+        self.assertFalse(permissions.can_list_files_path(alice, ''))
+        self.assertEqual(permissions.visible_children(alice, ''), {'soils'})
+        self.assertIsNone(permissions.visible_children(alice, 'Soils'))
+        self.assertEqual(permissions.granted_paths(alice), ['soils'])
+        self.assertIsNone(permissions.granted_paths(self.fresh(self.admin)))
 
     def test_ordinary_folders_keep_the_owner_or_public_rule(self):
         mine = Folder.objects.create(name='mine', owner=self.bob)
@@ -241,6 +284,17 @@ class TokenApi(GrantTree):
 
 class GrantCommand(GrantTree):
 
+    def setUp(self):
+        self.mount = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.mount, True)
+        for rel in ('Soils/2024', 'Grazing Systems', 'Flux Measurements'):
+            os.makedirs(os.path.join(self.mount, rel))
+        with open(os.path.join(self.mount, 'Soils', 'soil_cores.csv'), 'w') as fh:
+            fh.write('x')
+        patch = override_settings(ADAPT_MOUNT=self.mount)
+        patch.enable()
+        self.addCleanup(patch.disable)
+
     def run_command(self, *args):
         out = StringIO()
         call_command('adapt_grants', *args, stdout=out)
@@ -255,7 +309,7 @@ class GrantCommand(GrantTree):
 
     def test_granting_again_updates_instead_of_duplicating(self):
         self.run_command('grant', 'alice', 'Soils', '--write')
-        self.assertEqual(FolderGrant.objects.filter(user=self.alice, folder=self.soils).count(), 1)
+        self.assertEqual(FolderGrant.objects.filter(user=self.alice, path__iexact='Soils').count(), 1)
         self.assertTrue(permissions.can_write(self.fresh(self.alice), self.soils_file))
 
     def test_a_group_grant_creates_the_group(self):
@@ -265,6 +319,22 @@ class GrantCommand(GrantTree):
     def test_an_unknown_folder_names_the_folders_that_exist(self):
         with self.assertRaisesMessage(CommandError, 'Grazing Systems'):
             self.run_command('grant', 'bob', 'Grazing')
+
+    def test_a_path_is_stored_as_the_share_spells_it(self):
+        self.run_command('grant', 'bob', 'soils/2024')
+        self.assertEqual(FolderGrant.objects.get(user=self.bob).path, 'Soils/2024')
+
+    def test_files_and_hidden_folders_cannot_be_granted(self):
+        os.makedirs(os.path.join(self.mount, 'adma_geo_production'))
+        for path in ('Soils/soil_cores.csv', 'adma_geo_production', '../outside'):
+            with self.subTest(path=path), self.assertRaises(CommandError):
+                self.run_command('grant', 'bob', path)
+        self.assertFalse(FolderGrant.objects.filter(user=self.bob).exists())
+
+    def test_a_grant_can_be_revoked_after_its_folder_has_gone(self):
+        FolderGrant.objects.create(path='Old Project', user=self.bob)
+        self.run_command('revoke', 'bob', 'old project')
+        self.assertFalse(FolderGrant.objects.filter(user=self.bob).exists())
 
 
 class MigrationMakesAdaptPrivate(GrantTree):
@@ -278,3 +348,13 @@ class MigrationMakesAdaptPrivate(GrantTree):
         self.assertFalse(Folder.objects.get(pk=self.grazing.pk).is_public)
         self.assertFalse(File.objects.get(pk=self.grazing_file.pk).is_public)
         self.assertTrue(Folder.objects.get(pk=own.pk).is_public)
+
+
+class MigrationNamesGrantsByPath(GrantTree):
+    """0019 copies each grant's folder into a path; tested on the function it runs."""
+
+    def test_a_folder_becomes_its_names_below_the_root(self):
+        migration = import_module('filemanager.migrations.0019_foldergrant_path')
+        self.assertEqual(migration.folder_path(self.soils_2024), 'Soils/2024')
+        self.assertEqual(migration.folder_path(self.grazing), 'Grazing Systems')
+        self.assertEqual(migration.folder_path(self.root), '')

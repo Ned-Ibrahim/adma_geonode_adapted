@@ -187,8 +187,8 @@ class Rerun(LoadTest):
         sync = User.objects.create_user('sync')
         root = Folder.objects.create(name='ADAPT', owner=sync, is_third_party=True, third_party_source='adapt')
         flux = Folder.objects.create(name='Flux', parent=root, owner=sync, is_third_party=True,
-                                     third_party_source='adapt')
-        FolderGrant.objects.create(folder=flux, group=Group.objects.get(name='snr_adapt_admin'), can_write=True)
+                                     third_party_source='adapt', third_party_id='Flux')
+        FolderGrant.objects.create(path='Flux', group=Group.objects.get(name='snr_adapt_admin'), can_write=True)
         alice = User.objects.get(username='alice.a')
         self.assertTrue(permissions.can_write(alice, flux))
         self.load(ROSTER.replace(';snr_adapt_admin', ''))

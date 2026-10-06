@@ -1,26 +1,32 @@
 """One place that answers "may this user read or write this object?".
 
-Anything that is not an ADAPT reference keeps ADMA's own rule: the owner may,
+Anything that is not on the ADAPT share keeps ADMA's own rule: the owner may,
 the public may read, nobody else.
 
 ADAPT is different. ADMA mounts the share with one account that can read all of
 it, so the share's own permissions do not reach ADMA users. Access comes from
-FolderGrant rows that an administrator manages:
+FolderGrant rows that an administrator manages, each naming a folder by its
+path on the share (see filemanager.adapt_share):
 
 - A grant on a folder covers that folder, its files and everything beneath it.
 - A user with a grant somewhere below a folder may open that folder to navigate
   down, but sees only the branches that lead to their grants and none of the
   files beside them.
 - No grant, no access. ADAPT rows ignore is_public and ownership: they belong to
-  the sync account, and older rows were created public.
+  the sync account or the uploader, and older rows were created public.
 - Superusers see everything.
+
+Paths compare without case, as on the share. The *_path functions answer for a
+path; can_read, can_write and can_list_files answer for a Folder or File row and
+look ADAPT rows up by the path they record.
 """
-from collections import defaultdict
 from typing import Iterable, List, Optional, Set
 
 from django.db.models import Q, Sum
 from django.utils.functional import cached_property
 
+from . import adapt_share
+from .adapt_storage import ROOT_SENTINEL
 from .models import Folder, FolderGrant
 
 
@@ -28,50 +34,45 @@ def _is_adapt(obj) -> bool:
     return bool(getattr(obj, 'is_third_party', False) and getattr(obj, 'third_party_source', None) == 'adapt')
 
 
-def _folder_of(obj) -> Optional[Folder]:
-    if isinstance(obj, Folder):
-        return obj
-    return getattr(obj, 'folder', None)
+def adapt_path(obj) -> Optional[str]:
+    """Where an ADAPT row sits on the share, or None if what it records is not a path ADMA accepts."""
+    rel = obj.third_party_id or ''
+    if isinstance(obj, Folder) and (rel == ROOT_SENTINEL or obj.parent_id is None):
+        return ''
+    try:
+        return adapt_share.normalize(rel)
+    except adapt_share.AdaptPathError:
+        return None
 
 
 class _Grants:
-    """One user's ADAPT grants, loaded once per request and cached on the user object."""
+    """One user's ADAPT grants as path keys, loaded once per request and cached on the user object."""
 
     def __init__(self, user):
-        self._parents = {}
         self.read = set()
         self.write = set()
         rows = FolderGrant.objects.filter(Q(user=user) | Q(group__in=user.groups.all()))
-        for folder_id, can_write in rows.values_list('folder_id', 'can_write'):
-            self.read.add(folder_id)
+        for path, can_write in rows.values_list('path', 'can_write'):
+            key = adapt_share.key(path)
+            self.read.add(key)
             if can_write:
-                self.write.add(folder_id)
+                self.write.add(key)
         # Folders above a grant: open for navigation only.
-        self.on_path = set()
-        for folder_id in self.read:
-            self.on_path.update(self.chain(folder_id)[1:])
+        self.on_path = {key[:i] for key in self.read for i in range(len(key))}
 
-    def chain(self, folder_id) -> List:
-        """`folder_id` followed by the ids of all its ancestors, nearest first."""
-        ids = []
-        current = folder_id
-        while current is not None and current not in ids:
-            ids.append(current)
-            if current not in self._parents:
-                self._parents[current] = (
-                    Folder.objects.filter(pk=current).values_list('parent_id', flat=True).first()
-                )
-            current = self._parents[current]
-        return ids
+    @staticmethod
+    def covers(key, granted) -> bool:
+        return any(key[:i] in granted for i in range(len(key) + 1))
 
-    def parent_of(self, folder_id):
-        chain = self.chain(folder_id)
-        return chain[1] if len(chain) > 1 else None
+    def children_on_path(self, key) -> Set[str]:
+        """Names (without case) of the folders directly in `key` that are granted or lead to a grant."""
+        n = len(key)
+        return {k[n] for k in self.read | self.on_path if len(k) > n and k[:n] == key}
 
-    def covers(self, folder: Optional[Folder], granted: set) -> bool:
-        if folder is None or not granted:
-            return False
-        return any(folder_id in granted for folder_id in self.chain(folder.pk))
+    def topmost_below(self, key) -> List[tuple]:
+        """Granted folders beneath `key` that no other grant covers from above."""
+        n = len(key)
+        return [k for k in self.read if len(k) > n and k[:n] == key and not self.covers(k[:-1], self.read)]
 
 
 def _grants(user) -> _Grants:
@@ -86,17 +87,69 @@ def _signed_in(user) -> bool:
     return user is not None and getattr(user, 'is_authenticated', False)
 
 
+# ------------------------------------------------------------------ by path
+
+def can_read_path(user, rel, is_dir=True) -> bool:
+    """Whether `user` may see `rel`. A folder above a grant counts, for navigation."""
+    if rel is None or not _signed_in(user):
+        return False
+    if user.is_superuser:
+        return True
+    grants = _grants(user)
+    key = adapt_share.key(rel)
+    return grants.covers(key, grants.read) or (is_dir and key in grants.on_path)
+
+
+def can_write_path(user, rel) -> bool:
+    if rel is None or not _signed_in(user):
+        return False
+    if user.is_superuser:
+        return True
+    grants = _grants(user)
+    return grants.covers(adapt_share.key(rel), grants.write)
+
+
+def can_list_files_path(user, rel) -> bool:
+    """Whether the files directly inside folder `rel` are visible, not just the folder itself."""
+    if rel is None or not _signed_in(user):
+        return False
+    if user.is_superuser:
+        return True
+    grants = _grants(user)
+    return grants.covers(adapt_share.key(rel), grants.read)
+
+
+def visible_children(user, rel) -> Optional[Set[str]]:
+    """Which folders directly in folder `rel` the user may see.
+
+    None when the user may see everything in it; otherwise the names, without
+    case, of the folders that lead to the user's grants. Files are visible
+    exactly when this is None.
+    """
+    if can_list_files_path(user, rel):
+        return None
+    if not _signed_in(user):
+        return set()
+    return _grants(user).children_on_path(adapt_share.key(rel))
+
+
+def granted_paths(user) -> Optional[List[str]]:
+    """The folders whose whole subtree the user may read, as path keys joined with "/"; None for all of ADAPT."""
+    if not _signed_in(user):
+        return []
+    if user.is_superuser:
+        return None
+    return ['/'.join(key) for key in _grants(user).read]
+
+
+# --------------------------------------------------------------- by object
+
 def can_read(user, obj) -> bool:
     if obj is None or not _signed_in(user):
         return False
     if not _is_adapt(obj):
         return obj.owner_id == user.id or getattr(obj, 'is_public', False)
-    if user.is_superuser:
-        return True
-    grants = _grants(user)
-    if grants.covers(_folder_of(obj), grants.read):
-        return True
-    return isinstance(obj, Folder) and obj.pk in grants.on_path
+    return can_read_path(user, adapt_path(obj), is_dir=isinstance(obj, Folder))
 
 
 def can_write(user, obj) -> bool:
@@ -104,22 +157,14 @@ def can_write(user, obj) -> bool:
         return False
     if not _is_adapt(obj):
         return obj.owner_id == user.id
-    if user.is_superuser:
-        return True
-    grants = _grants(user)
-    return grants.covers(_folder_of(obj), grants.write)
+    return can_write_path(user, adapt_path(obj))
 
 
 def can_list_files(user, folder) -> bool:
     """Whether the files directly inside `folder` are visible, not just the folder itself."""
     if not _is_adapt(folder):
         return can_read(user, folder)
-    if not _signed_in(user):
-        return False
-    if user.is_superuser:
-        return True
-    grants = _grants(user)
-    return grants.covers(folder, grants.read)
+    return can_list_files_path(user, adapt_path(folder))
 
 
 class FolderCounts:
@@ -128,23 +173,22 @@ class FolderCounts:
     A folder the user may list in full reports its own counts. A folder that is
     open only on the way to a grant reports just the branches leading to the
     user's grants and, for `total_files`, the cached totals of the topmost
-    granted folders beneath it. That reuses the grants already loaded for the
-    request, so it costs at most one query however large the tree is.
+    granted folders beneath it.
     """
 
     def __init__(self, user, folder):
         self._folder = folder
         self._full = not _is_adapt(folder) or can_list_files(user, folder)
         self._grants = _grants(user) if not self._full and _signed_in(user) else None
+        self._key = adapt_share.key(adapt_path(folder) or '') if self._grants is not None else ()
 
     @cached_property
     def subfolders(self) -> int:
         if self._full:
             return self._folder.subfolder_count
-        grants = self._grants
-        if grants is None:
+        if self._grants is None:
             return 0
-        return sum(1 for pk in grants.read | grants.on_path if grants.parent_of(pk) == self._folder.pk)
+        return len(self._grants.children_on_path(self._key))
 
     @cached_property
     def files(self) -> int:
@@ -154,16 +198,16 @@ class FolderCounts:
     def total_files(self) -> int:
         if self._full:
             return self._folder.total_file_count
-        grants = self._grants
-        if grants is None:
+        if self._grants is None:
             return 0
-        topmost = [
-            pk for pk in grants.read
-            if self._folder.pk in grants.chain(pk)[1:] and not grants.read.intersection(grants.chain(pk)[1:])
-        ]
+        topmost = {'/'.join(key) for key in self._grants.topmost_below(self._key)}
         if not topmost:
             return 0
-        return Folder.objects.filter(pk__in=topmost).aggregate(n=Sum('cached_total_file_count'))['n'] or 0
+        rows = Folder.objects.filter(third_party_source='adapt').exclude(parent=None)
+        lookup = Q()
+        for path in topmost:
+            lookup |= Q(third_party_id__iexact=path)
+        return rows.filter(lookup).aggregate(n=Sum('cached_total_file_count'))['n'] or 0
 
     @property
     def summary(self) -> str:
@@ -197,17 +241,12 @@ def adapt_folder_ids(user, include_path=False) -> Set:
     grants = _grants(user)
     if not grants.read:
         return set()
-    # The ADAPT tree is a few hundred folders, so it is loaded whole.
-    children = defaultdict(list)
-    for pk, parent_id in Folder.objects.filter(third_party_source='adapt').values_list('id', 'parent_id'):
-        children[parent_id].append(pk)
     covered = set()
-    pending = list(grants.read)
-    while pending:
-        pk = pending.pop()
-        if pk not in covered:
+    rows = Folder.objects.filter(third_party_source='adapt').values_list('id', 'parent_id', 'third_party_id')
+    for pk, parent_id, rel in rows:
+        if parent_id is None or rel == ROOT_SENTINEL:
+            rel = ''
+        key = adapt_share.key(rel or '')
+        if grants.covers(key, grants.read) or (include_path and key in grants.on_path):
             covered.add(pk)
-            pending.extend(children.get(pk, ()))
-    if include_path:
-        covered |= grants.on_path
     return covered

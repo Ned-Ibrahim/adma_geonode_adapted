@@ -2,6 +2,7 @@ import uuid
 from pathlib import Path
 from django.core.validators import RegexValidator
 from django.db import models
+from django.db.models.functions import Lower
 # from django.contrib.gis.db import models as gis_models  # Disabled for now
 # from django.contrib.gis.geos import Point
 from django.contrib.auth import get_user_model
@@ -1067,13 +1068,20 @@ class Tool(models.Model):
 
 
 class FolderGrant(models.Model):
-    """Access to an ADAPT folder and everything beneath it, for one user or one group.
+    """Access to a folder on the ADAPT share and everything beneath it, for one user or one group.
 
     ADMA reads the ADAPT share through a single account that sees all of it, so
     the share's own permissions never reach ADMA users. Who sees which folder is
     decided here instead, by an administrator. See filemanager.permissions.
+
+    The folder is named by its path on the share, as ADMA spells paths (see
+    filemanager.adapt_share): "Soils/2024", or "" for the whole share. Paths
+    compare without case, as on the share.
     """
-    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='grants')
+    path = models.CharField(
+        max_length=1024, blank=True,
+        help_text='Folder on the ADAPT share, e.g. "Soils/2024". Empty means the whole share.',
+    )
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, null=True, blank=True, related_name='folder_grants',
     )
@@ -1090,7 +1098,7 @@ class FolderGrant(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['folder__name']
+        ordering = ['path']
         constraints = [
             models.CheckConstraint(
                 check=(
@@ -1101,20 +1109,20 @@ class FolderGrant(models.Model):
                 violation_error_message='Choose a user or a group, not both and not neither.',
             ),
             models.UniqueConstraint(
-                fields=['folder', 'user'], condition=models.Q(user__isnull=False),
-                name='foldergrant_unique_user',
+                Lower('path'), 'user', condition=models.Q(user__isnull=False),
+                name='foldergrant_unique_user_path',
                 violation_error_message='This user already has a grant on this folder. Edit that grant instead.',
             ),
             models.UniqueConstraint(
-                fields=['folder', 'group'], condition=models.Q(group__isnull=False),
-                name='foldergrant_unique_group',
+                Lower('path'), 'group', condition=models.Q(group__isnull=False),
+                name='foldergrant_unique_group_path',
                 violation_error_message='This group already has a grant on this folder. Edit that grant instead.',
             ),
         ]
 
     def __str__(self):
         who = self.user.username if self.user_id else f'group {self.group.name}'
-        return f"{who} {'read/write' if self.can_write else 'read'} {self.folder.get_full_path()}"
+        return f"{who} {'read/write' if self.can_write else 'read'} {self.path or 'the whole ADAPT share'}"
 
 
 class UserProfile(models.Model):

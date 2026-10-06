@@ -3,6 +3,7 @@
 Every name, NUID and folder here is made up. The real export and roster are
 personal data and never enter the repository.
 """
+import os
 import shutil
 import tempfile
 from io import StringIO
@@ -11,10 +12,10 @@ from pathlib import Path
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.management import CommandError, call_command
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from filemanager import ntfs_acl
-from filemanager.models import Folder, FolderGrant, UserProfile
+from filemanager.models import FolderGrant, UserProfile
 
 User = get_user_model()
 
@@ -27,12 +28,6 @@ def entry(path, identity, rights, protected=False, applies_to=ALL, kind='Allow')
     return f'"{path}","{protected}","{identity}","{rights}","{kind}","{applies_to}"\n'
 
 
-def adapt_folder(name, parent, owner):
-    return Folder.objects.create(
-        name=name, parent=parent, owner=owner, is_third_party=True, third_party_source='adapt',
-    )
-
-
 class AclTree(TestCase):
     """ADAPT/{Soils/{2024}, Grazing Systems, Flux Measurements} and four people.
 
@@ -40,15 +35,15 @@ class AclTree(TestCase):
     named on her own; dave has an account and nothing else.
     """
 
+    # Folders on the share, by path.
+    root = ''
+    soils = 'Soils'
+    soils_2024 = 'Soils/2024'
+    grazing = 'Grazing Systems'
+    flux = 'Flux Measurements'
+
     @classmethod
     def setUpTestData(cls):
-        sync = User.objects.create_user('sync')
-        cls.root = adapt_folder('ADAPT', None, sync)
-        cls.soils = adapt_folder('Soils', cls.root, sync)
-        cls.soils_2024 = adapt_folder('2024', cls.soils, sync)
-        cls.grazing = adapt_folder('Grazing Systems', cls.root, sync)
-        cls.flux = adapt_folder('Flux Measurements', cls.root, sync)
-
         cls.all = Group.objects.create(name='snr_adapt_all')
         cls.admin = Group.objects.create(name='snr_adapt_admin')
         cls.alice = cls.person('alice.a', '00000001', cls.all, cls.admin)
@@ -66,6 +61,18 @@ class AclTree(TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.dir)
+        # A temporary directory stands in for the share.
+        self.mount = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.mount, True)
+        for rel in (self.soils_2024, self.grazing, self.flux):
+            self.make_folder(rel)
+        patch = override_settings(ADAPT_MOUNT=self.mount)
+        patch.enable()
+        self.addCleanup(patch.disable)
+
+    def make_folder(self, rel):
+        os.makedirs(os.path.join(self.mount, rel), exist_ok=True)
+        return rel
 
     def write(self, name, text):
         path = self.dir / name
@@ -84,9 +91,9 @@ class AclTree(TestCase):
     def grants(self):
         """{(folder path, 'user:name' or 'group:name'): 'read' or 'write'}"""
         found = {}
-        for g in FolderGrant.objects.select_related('folder', 'user', 'group'):
+        for g in FolderGrant.objects.select_related('user', 'group'):
             who = f'user:{g.user.username}' if g.user_id else f'group:{g.group.name}'
-            found[(g.folder.get_full_path(), who)] = 'write' if g.can_write else 'read'
+            found['/'.join(['ADAPT'] + ([g.path] if g.path else [])), who] = 'write' if g.can_write else 'read'
         return found
 
 
@@ -144,7 +151,7 @@ class Import(AclTree):
 
     def test_identities_it_cannot_map_are_listed_and_not_imported(self):
         out, _ = self.import_export(EXPORT, '--apply')
-        section = out.split('Not imported:')[1].split('Folders not in the catalogue')[0]
+        section = out.split('Not imported:')[1].split('Folders not on the share')[0]
         for identity in ('BUILTIN\\Administrators', 'BUILTIN\\Users', 'CREATOR OWNER', 'NT AUTHORITY\\SYSTEM',
                          'UNL-AD\\bob2', 'NEAD\\99999999', 'NEAD\\snr-helpdesk'):
             with self.subTest(identity=identity):
@@ -154,9 +161,9 @@ class Import(AclTree):
         self.assertIn('FullControl on (root), Flux Measurements', section)
         self.assertEqual(Group.objects.count(), 2)
 
-    def test_folders_missing_from_the_catalogue_are_listed_once_per_branch(self):
+    def test_folders_missing_from_the_share_are_listed_once_per_branch(self):
         out, _ = self.import_export()
-        section = out.split('Folders not in the catalogue')[1]
+        section = out.split('Folders not on the share')[1]
         self.assertIn('Old Projects\\Archive (and 1 folder beneath it)', section)
         self.assertNotIn('Archive\\2019', section.split('Grants these')[0])
 
@@ -183,10 +190,10 @@ class Import(AclTree):
 
     def test_apply_replaces_every_existing_adapt_grant(self):
         hand_made = Group.objects.create(name='adapt-all')
-        FolderGrant.objects.create(folder=self.root, group=hand_made)
-        FolderGrant.objects.create(folder=self.grazing, user=self.dave, can_write=True)
-        FolderGrant.objects.create(folder=self.grazing, user=self.bob, can_write=False)
-        kept = FolderGrant.objects.create(folder=self.root, user=self.carol)
+        FolderGrant.objects.create(path=self.root, group=hand_made)
+        FolderGrant.objects.create(path=self.grazing, user=self.dave, can_write=True)
+        FolderGrant.objects.create(path=self.grazing, user=self.bob, can_write=False)
+        kept = FolderGrant.objects.create(path=self.root, user=self.carol)
 
         out, _ = self.import_export(EXPORT, '--apply')
 
@@ -196,11 +203,11 @@ class Import(AclTree):
 
     def test_rerun_with_the_same_export_changes_nothing(self):
         self.import_export(EXPORT, '--apply')
-        before = set(FolderGrant.objects.values_list('pk', 'folder_id', 'user_id', 'group_id', 'can_write'))
+        before = set(FolderGrant.objects.values_list('pk', 'path', 'user_id', 'group_id', 'can_write'))
         out, error = self.import_export(EXPORT, '--apply')
         self.assertIsNone(error)
         self.assertIn('Add 0, change 0, remove 0, unchanged 8.', out)
-        after = set(FolderGrant.objects.values_list('pk', 'folder_id', 'user_id', 'group_id', 'can_write'))
+        after = set(FolderGrant.objects.values_list('pk', 'path', 'user_id', 'group_id', 'can_write'))
         self.assertEqual(before, after)
 
     def test_two_entries_for_the_same_identity_and_folder_become_one_grant(self):
@@ -248,7 +255,7 @@ class Import(AclTree):
     def test_export_paths_find_folders_without_case(self):
         out, _ = self.import_export(HEADER + entry('soils\\2024', 'NEAD\\00000002', 'FullControl'), '--apply')
         self.assertEqual(self.grants(), {('ADAPT/Soils/2024', 'user:bob2'): 'write'})
-        self.assertNotIn('not in the catalogue (1', out)
+        self.assertNotIn('not on the share (1', out)
 
     def test_inherited_entries_are_skipped_when_the_export_marks_them(self):
         text = ('"Path","Protected","Identity","Rights","Type","AppliesTo","IsInherited"\n'
@@ -268,10 +275,11 @@ class Import(AclTree):
         _, error = self.import_export('Path,Identity\n(root),NEAD\\00000001\n', '--apply')
         self.assertIn('Protected', str(error))
 
-    def test_no_adapt_root_is_an_error(self):
-        Folder.objects.filter(pk=self.root.pk).delete()
+    def test_an_empty_share_is_an_error(self):
+        for name in os.listdir(self.mount):
+            shutil.rmtree(os.path.join(self.mount, name))
         _, error = self.import_export()
-        self.assertIn('No ADAPT root folder', str(error))
+        self.assertIn('Is it mounted?', str(error))
 
 
 def acl(*rows):
@@ -462,7 +470,7 @@ class Check(CheckTree):
 
     def test_a_grant_changed_by_hand_is_caught(self):
         self.check()
-        FolderGrant.objects.filter(folder=self.grazing, user=self.bob).update(can_write=False)
+        FolderGrant.objects.filter(path=self.grazing, user=self.bob).update(can_write=False)
         out, error = self.check(apply=False)
         self.assertIsNotNone(error)
         self.assertIn('bob2 on Grazing Systems: ADMA read, snr18 write', out)
@@ -505,7 +513,7 @@ class Check(CheckTree):
         self.run_acl('import', path, '--apply')
         return self.run_acl('check', path, '--roster', self.write('roster.csv', ROSTER), *extra)
 
-    def test_team_folders_the_catalogue_lacks_fail_the_check(self):
+    def test_team_folders_the_share_lacks_fail_the_check(self):
         out, error = self.check_with(MATCHING + entry('Range Science', 'NEAD\\00000002', 'FullControl'))
         self.assertIsNotNone(error)
         self.assertIn('Range Science', str(error))
@@ -515,14 +523,14 @@ class Check(CheckTree):
         out, error = self.check_with(MATCHING + entry('Range Science', 'NEAD\\00000002', 'FullControl'),
                                      '--allow-missing')
         self.assertIsNone(error)
-        self.assertIn('not in the catalogue, so not checked: Range Science', out)
+        self.assertIn('not on the share, so not checked: Range Science', out)
 
     def test_folder_names_match_without_case(self):
         export = MATCHING.replace('"Grazing Systems"', '"GRAZING systems"')
         out, error = self.check_with(export)
         self.assertIsNone(error)
         self.assertEqual(self.matrix(out)['bob2']['Grazing Systems'], 'W/W')
-        self.assertNotIn('not in the catalogue', out)
+        self.assertNotIn('not on the share', out)
 
 
 NO_PROPAGATE = 'ContainerInherit, ObjectInherit/NoPropagateInherit'
@@ -533,10 +541,9 @@ class CheckBelowTeamFolders(CheckTree):
 
     def setUp(self):
         super().setUp()
-        sync = self.root.owner
-        self.tower = adapt_folder('Tower', self.flux, sync)
-        self.tower_2019 = adapt_folder('2019', self.tower, sync)
-        self.tower_2020 = adapt_folder('2020', self.tower, sync)
+        self.tower = self.make_folder('Flux Measurements/Tower')
+        self.tower_2019 = self.make_folder('Flux Measurements/Tower/2019')
+        self.tower_2020 = self.make_folder('Flux Measurements/Tower/2020')
 
     def others(self, out):
         return out.split('Other folders checked')[1].split('\n\n')[0]
@@ -544,7 +551,7 @@ class CheckBelowTeamFolders(CheckTree):
     def test_folders_with_their_own_entries_are_checked(self):
         export = MATCHING + entry('Soils\\2024', 'NEAD\\00000003', 'FullControl')
         self.check(export)
-        FolderGrant.objects.filter(folder=self.soils_2024, user=self.carol).update(can_write=False)
+        FolderGrant.objects.filter(path=self.soils_2024, user=self.carol).update(can_write=False)
         out, error = self.check(export, apply=False)
         self.assertIsNotNone(error)
         self.assertIn('ADAPT/Soils/2024', self.others(out))
@@ -576,7 +583,7 @@ class CheckBelowTeamFolders(CheckTree):
         export = MATCHING + entry('Flux Measurements', 'NEAD\\00000002', 'FullControl',
                                   protected=True, applies_to=NO_PROPAGATE)
         self.check(export)
-        FolderGrant.objects.create(folder=self.tower_2020, user=self.dave, can_write=True)
+        FolderGrant.objects.create(path=self.tower_2020, user=self.dave, can_write=True)
         out, error = self.check(export, apply=False)
         self.assertIsNotNone(error)
         self.assertIn('dave4 on ADAPT/Flux Measurements/Tower/2020: ADMA write, snr18 nothing',

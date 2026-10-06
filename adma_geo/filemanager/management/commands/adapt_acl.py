@@ -19,7 +19,7 @@ so the export is the only source of ADAPT access afterwards:
   (BUILTIN\\Users, BUILTIN\\Administrators, CREATOR OWNER, NT AUTHORITY\\SYSTEM),
   accounts of other domains (UNL-AD\\...), NUIDs without an account, AD groups
   without a Django group, and rights that are neither read nor write.
-- Folders the catalogue does not hold are listed, and their entries skipped.
+- Folders that are not on the share are listed, and their entries skipped.
 - An ADMA grant covers the folder and everything beneath it. Entries that
   reach less on snr18 (NoPropagateInherit, InheritOnly) are imported as normal
   grants and listed as warnings, and so are folders that block inheritance on
@@ -41,7 +41,7 @@ to navigate towards a grant further down does not count. The snr18
 side is worked out from the export and the roster alone: Windows inheritance
 over the exported entries, with group membership taken from the roster.
 
-Team folders the export names but the catalogue lacks fail the check, unless
+Team folders the export names but the share lacks fail the check, unless
 --allow-missing is passed; then they are only listed. Folder names compare
 without case, as on the share.
 
@@ -65,8 +65,9 @@ they are listed per folder.
     python manage.py adapt_acl check acl.csv --roster roster.csv
     python manage.py adapt_acl check acl.csv --roster roster.csv --allow-missing
 """
+import os
 import re
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from dataclasses import replace
 
 from django.contrib.auth import get_user_model
@@ -74,9 +75,9 @@ from django.contrib.auth.models import Group
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from filemanager import permissions
+from filemanager import adapt_share, permissions
 from filemanager.management.commands.adapt_users import read_roster
-from filemanager.models import Folder, FolderGrant, UserProfile
+from filemanager.models import FolderGrant, UserProfile
 from filemanager.ntfs_acl import (
     EVERY_DOMAIN_USER,
     Acl,
@@ -128,54 +129,68 @@ def label(principal):
     return f'user {obj.username}' if kind == 'user' else f'group {obj.name}'
 
 
+# A folder at the top of the share, as check lists them.
+TeamFolder = namedtuple('TeamFolder', 'name path')
+
+
 class Catalogue:
-    """The ADAPT folder tree, loaded once, looked up by export path."""
+    """The folders on the ADAPT share, read as they are needed and looked up by export path.
+
+    A folder is known by its path on the share, as the share spells it.
+    """
 
     def __init__(self):
-        self.root = Folder.objects.filter(
-            name='ADAPT', parent=None, is_third_party=True, third_party_source='adapt',
-        ).first()
-        if self.root is None:
-            raise CommandError('No ADAPT root folder. Run setup_adapt and sync_adapt first.')
-        self.children = {}               # (parent id, name without case) -> folder id
-        self.below = defaultdict(list)   # parent id -> [(name, folder id)]
-        self.names = {}                  # folder id -> name
-        rows = Folder.objects.filter(third_party_source='adapt', deletion_in_progress=False)
-        for pk, parent_id, name in rows.values_list('id', 'parent_id', 'name'):
-            self.children[(parent_id, name.lower())] = pk
-            self.below[parent_id].append((name, pk))
-            self.names[pk] = name
+        root = adapt_share.mount_root()
+        try:
+            top = os.listdir(root)
+        except OSError as exc:
+            raise CommandError(f'Cannot read the ADAPT share at {root}: {exc}')
+        if not top:
+            raise CommandError(f'The ADAPT share at {root} is empty. Is it mounted?')
+        self.root = ''
+        self._folders = {}               # path -> names of the folders in it
+
+    def folders_in(self, rel):
+        """Names of the folders directly in `rel`, as the share spells them, hidden ones left out."""
+        if rel not in self._folders:
+            try:
+                here = adapt_share.resolve(rel)
+                names = [n for n in os.listdir(here)
+                         if not adapt_share.is_hidden(n) and os.path.isdir(os.path.join(here, n))]
+            except (adapt_share.AdaptPathError, OSError):
+                names = []
+            self._folders[rel] = sorted(names, key=str.lower)
+        return self._folders[rel]
 
     def find(self, path):
-        """Folder id for an export path, or None. Names compare without case, as on the share."""
-        pk = self.root.pk
+        """The share path of an export path, or None. Names compare without case, as on the share."""
+        rel = self.root
         for name in path:
-            pk = self.children.get((pk, name.lower()))
-            if pk is None:
+            match = next((n for n in self.folders_in(rel) if n.lower() == name.lower()), None)
+            if match is None:
                 return None
-        return pk
+            rel = adapt_share.join(rel, match)
+        return rel
 
     def display(self, path):
         return '/'.join(('ADAPT',) + tuple(path))
 
-    def descendants(self, folder_id, path, levels):
-        """(path, folder id) of the folders up to `levels` beneath a folder, named as the catalogue spells them."""
+    def descendants(self, rel, path, levels):
+        """(path, share path) of the folders up to `levels` beneath a folder, named as the share spells them."""
         found = []
-        for name, pk in self.below.get(folder_id, ()):
-            found.append((path + (name,), pk))
+        for name in self.folders_in(rel):
+            below = adapt_share.join(rel, name)
+            found.append((path + (name,), below))
             if levels > 1:
-                found += self.descendants(pk, path + (name,), levels - 1)
+                found += self.descendants(below, path + (name,), levels - 1)
         return found
 
     def spelled(self, path):
-        """An export path in the catalogue's spelling, or None if it is not in the catalogue."""
-        pk, names = self.root.pk, []
-        for part in path:
-            pk = self.children.get((pk, part.lower()))
-            if pk is None:
-                return None
-            names.append(self.names[pk])
-        return tuple(names)
+        """An export path in the share's spelling, or None if it is not on the share."""
+        rel = self.find(path)
+        if rel is None:
+            return None
+        return tuple(rel.split('/')) if rel else ()
 
 
 class Command(BaseCommand):
@@ -190,7 +205,7 @@ class Command(BaseCommand):
         check.add_argument('export', help='snr18 ACL export (CSV)')
         check.add_argument('--roster', required=True, help='Roster CSV, as for adapt_users load')
         check.add_argument('--allow-missing', action='store_true',
-                           help='List team folders the export names but the catalogue lacks instead of failing')
+                           help='List team folders the export names but the share lacks instead of failing')
 
     def handle(self, *args, **options):
         entries = self._read(options['export'])
@@ -220,19 +235,19 @@ class Command(BaseCommand):
     def _import(self, entries, apply):
         catalogue = Catalogue()
         principals = Principals()
-        wanted = {}                      # (folder id, kind, principal pk) -> [can_write, principal, path]
+        wanted = {}                      # (path key, kind, principal pk) -> [can_write, principal, export path, share path]
         skipped = defaultdict(list)      # (identity, reason) -> entries on known folders
         skipped_elsewhere = defaultdict(int)
         unknown = {}                     # path_key -> path, as the export first spells it
-        lost = []                        # entries for ADMA users or groups on folders the catalogue lacks
+        lost = []                        # entries for ADMA users or groups on folders the share lacks
         warnings = []
 
         for e in entries:
-            folder_id = catalogue.find(e.path)
+            rel = catalogue.find(e.path)
             principal, reason = principals.resolve(e.identity)
             if principal and not (e.reads or e.writes):
                 principal, reason = None, f'rights {e.rights_text} give neither read nor write'
-            if folder_id is None:
+            if rel is None:
                 unknown.setdefault(path_key(e.path), e.path)
                 if principal is None:
                     skipped_elsewhere[(e.identity, reason)] += 1
@@ -248,29 +263,28 @@ class Command(BaseCommand):
                 warnings.append(f'{e.identity} ({label(principal)}) {e.rights_text} on {e.display_path}: '
                                 'on snr18 they may create and change files but not delete them. '
                                 'ADMA has no such level, so this is imported as read.')
-            key = (folder_id, principal[0], principal[1].pk)
-            current = wanted.setdefault(key, [False, principal, e.path])
+            key = (adapt_share.key(rel), principal[0], principal[1].pk)
+            current = wanted.setdefault(key, [False, principal, e.path, rel])
             current[0] = current[0] or e.writes
 
         warnings += self._protected_warnings(entries, catalogue, wanted)
 
         existing = {}
-        adapt_grants = FolderGrant.objects.filter(folder__third_party_source='adapt')
-        for grant in adapt_grants.select_related('folder', 'user', 'group'):
+        for grant in FolderGrant.objects.select_related('user', 'group'):
             kind, pk = ('user', grant.user_id) if grant.user_id else ('group', grant.group_id)
-            existing[(grant.folder_id, kind, pk)] = grant
+            existing[(adapt_share.key(grant.path), kind, pk)] = grant
         add = [key for key in wanted if key not in existing]
         change = [key for key in wanted if key in existing and existing[key].can_write != wanted[key][0]]
         remove = [key for key in existing if key not in wanted]
         unchanged = len(wanted) - len(add) - len(change)
 
         def line(sign, key, text):
-            _, principal, path = wanted[key]
+            _, principal, path, _ = wanted[key]
             return f'  {sign} {label(principal):<32} {text:<16} {catalogue.display(path)}'
 
         def removed(grant):
             who = f'user {grant.user.username}' if grant.user_id else f'group {grant.group.name}'
-            path = grant.folder.get_full_path()
+            path = catalogue.display(tuple(grant.path.split('/')) if grant.path else ())
             return path, who, f'  - {who:<32} {mode(True, grant.can_write):<16} {path}'
 
         def by_path(key):
@@ -282,7 +296,7 @@ class Command(BaseCommand):
             for k in sorted(change, key=by_path)])
         self._section('Grants to remove', [text for *_, text in sorted(removed(existing[k]) for k in remove)])
         self._section('Not imported:', self._skipped_lines(skipped, skipped_elsewhere), plain=True)
-        self._section(f'Folders not in the catalogue ({plural(len(unknown), "folder")}; their entries are skipped):',
+        self._section(f'Folders not on the share ({plural(len(unknown), "folder")}; their entries are skipped):',
                       self._unknown_lines(unknown.values()), plain=True)
         self._section('Grants these folders would carry, not imported:', sorted(lost), plain=True)
         self._section('Warnings:', [f'  {w}' for w in warnings], plain=True)
@@ -295,14 +309,14 @@ class Command(BaseCommand):
                     grant.can_write = wanted[key][0]
                     grant.save(update_fields=['can_write'])
                 FolderGrant.objects.bulk_create([
-                    FolderGrant(folder_id=key[0], can_write=wanted[key][0], **{key[1]: wanted[key][1][1]})
+                    FolderGrant(path=wanted[key][3], can_write=wanted[key][0], **{key[1]: wanted[key][1][1]})
                     for key in add
                 ])
 
         self.stdout.write(f'Add {len(add)}, change {len(change)}, remove {len(remove)}, unchanged {unchanged}.')
         skipped_count = sum(len(v) for v in skipped.values()) + sum(skipped_elsewhere.values()) + len(lost)
         self.stdout.write(f'{plural(skipped_count, "entry", "entries")} not imported, '
-                          f'{plural(len(unknown), "folder")} not in the catalogue, '
+                          f'{plural(len(unknown), "folder")} not on the share, '
                           f'{plural(len(warnings), "warning")}.')
         if not (add or change or remove):
             self.stdout.write('Nothing to change.')
@@ -335,9 +349,9 @@ class Command(BaseCommand):
     @staticmethod
     def _protected_warnings(entries, catalogue, wanted):
         """Folders that block inheritance on snr18, but that ADMA grants on folders above still reach."""
-        level = defaultdict(int)             # (folder id, kind, pk) -> 1 read, 2 write
+        level = defaultdict(int)             # (path key, kind, pk) -> 1 read, 2 write
         principal_of = {}
-        for (folder_id, kind, pk), (can_write, principal, _) in wanted.items():
+        for (folder_id, kind, pk), (can_write, principal, _, _) in wanted.items():
             level[(folder_id, kind, pk)] = 2 if can_write else 1
             principal_of[(kind, pk)] = principal
         groups_of = defaultdict(set)
@@ -347,10 +361,11 @@ class Command(BaseCommand):
             groups_of[user_id].add(group_id)
         warnings = []
         for path in sorted({e.path for e in entries if e.protected and e.path}):
-            folder_id = catalogue.find(path)
-            if folder_id is None:
+            rel = catalogue.find(path)
+            if rel is None:
                 continue
-            above = [catalogue.find(path[:i]) for i in range(len(path))]
+            folder_id = adapt_share.key(rel)
+            above = [adapt_share.key(catalogue.find(path[:i])) for i in range(len(path))]
             reach = {}
             for (fid, kind, pk), lvl in level.items():
                 if fid in above:
@@ -385,7 +400,7 @@ class Command(BaseCommand):
                 lines.append(f'      {rights} on {", ".join(Command._branches(paths))}')
             elsewhere = skipped_elsewhere.get((identity, reason))
             if elsewhere:
-                lines.append(f'      and {plural(elsewhere, "entry", "entries")} on folders not in the catalogue')
+                lines.append(f'      and {plural(elsewhere, "entry", "entries")} on folders not on the share')
         return lines
 
     @staticmethod
@@ -420,9 +435,8 @@ class Command(BaseCommand):
         spread = set(spread.values())
         catalogue = Catalogue()
         principals = Principals()
-        folders = list(catalogue.root.subfolders.filter(deletion_in_progress=False).order_by('name'))
-        others = self._other_folders(entries, catalogue, {f.pk for f in folders})
-        objects = Folder.objects.in_bulk([pk for pk, _ in others.values()])
+        folders = [TeamFolder(name, name) for name in catalogue.folders_in(catalogue.root)]
+        others = self._other_folders(entries, catalogue, {f.path for f in folders})
         accounts = {p.nuid: p.user for p in UserProfile.objects.filter(nuid__in=[r.nuid for r in rows])
                     .select_related('user')}
 
@@ -433,12 +447,12 @@ class Command(BaseCommand):
             own = {f'{DOMAIN}\\{row.nuid}'} | {f'{DOMAIN}\\{g}' for g in row.groups}
             for folder in folders:
                 kind, adma, snr18 = self._compare(acl, widened, spread, found, user, name, own,
-                                                  folder, (folder.name,), folder.name)
+                                                  folder.path, (folder.name,), folder.name)
                 mark = {'match': '', 'builtin_only': '+', 'builtin': '*', 'reach': '*', 'mismatch': '!'}[kind]
-                cells[(row.nuid, folder.pk)] = f'{self._cell(*adma)}/{self._cell(*snr18)}{mark}'
+                cells[(row.nuid, folder.path)] = f'{self._cell(*adma)}/{self._cell(*snr18)}{mark}'
             for path in sorted(others, key=lambda p: [part.lower() for part in p]):
-                folder = objects[others[path][0]]
-                self._compare(acl, widened, spread, found, user, name, own, folder, path, catalogue.display(path))
+                self._compare(acl, widened, spread, found, user, name, own, others[path][0], path,
+                              catalogue.display(path))
 
         mismatches, accepted, notes, reach = found['mismatch'], found['builtin'], found['builtin_only'], found['reach']
         self._matrix(rows, accounts, folders, cells)
@@ -446,7 +460,7 @@ class Command(BaseCommand):
         missing = sorted({e.path[0] for e in entries if e.path and e.path[0].lower() not in known}, key=str.lower)
         if missing:
             self.stdout.write(self.style.WARNING(
-                f'Team folders in the export but not in the catalogue, so not checked: {", ".join(missing)}'))
+                f'Team folders in the export but not on the share, so not checked: {", ".join(missing)}'))
             self.stdout.write('')
         self._section(f'Other folders checked ({len(others)}), for every roster user: the root and folders with '
                       'entries of their own or blocked inheritance, and the two levels beneath an entry that does '
@@ -474,11 +488,11 @@ class Command(BaseCommand):
             raise CommandError(f'ADMA differs from snr18 in {plural(len(mismatches), "place")}; see Mismatches above.')
         if missing and not allow_missing:
             raise CommandError(f'{plural(len(missing), "team folder")} in the export '
-                               f'{"is" if len(missing) == 1 else "are"} not in the catalogue: {", ".join(missing)}. '
-                               'Run sync_adapt, or pass --allow-missing to check the rest.')
+                               f'{"is" if len(missing) == 1 else "are"} not on the share: {", ".join(missing)}. '
+                               'Pass --allow-missing to check the rest.')
 
     @staticmethod
-    def _compare(acl, widened, spread, found, user, name, own, folder, path, shown):
+    def _compare(acl, widened, spread, found, user, name, own, rel, path, shown):
         """Compare what ADMA and snr18 give one roster user on one folder.
 
         `own` is the user's export identities, `widened` the export with the
@@ -488,7 +502,7 @@ class Command(BaseCommand):
         everyone = own | EVERY_DOMAIN_USER
         strict = acl.access(path, own)
         snr18 = acl.access(path, everyone)
-        adma = ((permissions.can_list_files(user, folder), permissions.can_write(user, folder))
+        adma = ((permissions.can_list_files_path(user, rel), permissions.can_write_path(user, rel))
                 if user else (False, False))
         where = f'{name} on {shown}: ADMA {mode(*adma)}, snr18 {mode(*snr18)}'
         builtin = sorted({e.identity for e in acl.matching(path, EVERY_DOMAIN_USER)})
@@ -512,27 +526,27 @@ class Command(BaseCommand):
         return 'mismatch', adma, snr18
 
     @staticmethod
-    def _other_folders(entries, catalogue, team_ids):
-        """{catalogue path: (folder id, why)} for the folders check compares besides the team folders."""
+    def _other_folders(entries, catalogue, team_paths):
+        """{export path as the share spells it: (share path, why)} for the folders check compares besides the team folders."""
         found = {}
 
-        def add(path, pk, why):
-            if pk in team_ids:
+        def add(path, rel, why):
+            if rel in team_paths:
                 return
             if path in found:
                 if why not in found[path][1]:
-                    found[path] = (pk, f'{found[path][1]}; {why}')
+                    found[path] = (rel, f'{found[path][1]}; {why}')
             else:
-                found[path] = (pk, why)
+                found[path] = (rel, why)
 
         for e in entries:
             path = catalogue.spelled(e.path)
             if path is None:
                 continue
-            pk = catalogue.find(path)
-            add(path, pk, 'blocks inheritance' if e.protected else 'entries of its own')
+            rel = catalogue.find(path)
+            add(path, rel, 'blocks inheritance' if e.protected else 'entries of its own')
             if not e.whole_subtree:
-                for below, child in catalogue.descendants(pk, path, 2):
+                for below, child in catalogue.descendants(rel, path, 2):
                     add(below, child, f'beneath a limited entry on {path_text(path)}')
         return found
 
@@ -551,7 +565,7 @@ class Command(BaseCommand):
         self.stdout.write(f'{"user":<{width}}  ' + ''.join(f'{i:<6}' for i in range(1, len(folders) + 1)).rstrip())
         for row in sorted(rows, key=lambda r: names[r.nuid]):
             self.stdout.write(f'{names[row.nuid]:<{width}}  '
-                              + ''.join(f'{cells[(row.nuid, f.pk)]:<6}' for f in folders).rstrip())
+                              + ''.join(f'{cells[(row.nuid, f.path)]:<6}' for f in folders).rstrip())
         self.stdout.write('')
 
     @staticmethod

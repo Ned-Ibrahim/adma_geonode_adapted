@@ -64,11 +64,11 @@ class WriteBackCase(TestCase):
         self.sync()
         self.soils = Folder.objects.get(name='Soils', parent=self.root)
         self.flux = Folder.objects.get(name='Flux', parent=self.root)
-        FolderGrant.objects.create(folder=self.soils, user=self.reader)
-        FolderGrant.objects.create(folder=self.soils, user=self.writer, can_write=True)
+        FolderGrant.objects.create(path=self.soils.third_party_id, user=self.reader)
+        FolderGrant.objects.create(path=self.soils.third_party_id, user=self.writer, can_write=True)
         flux_team = Group.objects.create(name='flux-team')
         self.flux_member.groups.add(flux_team)
-        FolderGrant.objects.create(folder=self.flux, group=flux_team, can_write=True)
+        FolderGrant.objects.create(path=self.flux.third_party_id, group=flux_team, can_write=True)
 
     # ---------------------------------------------------------------- helpers
 
@@ -277,7 +277,9 @@ class NamesOnTheShare(WriteBackCase):
 
         response = self.upload(self.writer, self.soils)
 
-        self.assertEqual(response.status_code, 400)
+        # Grants match on the recorded path, and this one is no path on the share,
+        # so the folder is not even found for this user.
+        self.assertEqual(response.status_code, 404)
         self.assertEqual(os.listdir(os.path.join(self.outside, 'escaped')), [])
 
     def test_names_the_share_cannot_store_are_refused(self):
