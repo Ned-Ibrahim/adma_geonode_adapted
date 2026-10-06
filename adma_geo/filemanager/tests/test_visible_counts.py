@@ -3,15 +3,16 @@
 A user granted one branch of ADAPT opens the root to navigate down, but the
 root's full size (thousands of folders, a million files) is not theirs to know.
 
-The dashboard and the folder pages take ADAPT counts from the search index
-(see test_adapt_browse); search results still count the catalogue rows here.
+The dashboard, the folder pages and search take ADAPT counts from the search
+index (see test_adapt_browse and test_adapt_index); what is left here checks
+the wording of counts on the user's own folders.
 """
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from filemanager.models import File, Folder
 
-from .test_folder_grants import adapt_file, adapt_folder, grant_on
+from .test_folder_grants import adapt_file, adapt_folder
 
 User = get_user_model()
 
@@ -40,17 +41,6 @@ class VisibleCountsTree(TestCase):
 
     def dashboard(self):
         return self.client.get('/dashboard/').content.decode()
-
-
-class SearchRows(VisibleCountsTree):
-
-    def test_search_results_count_only_the_way_down(self):
-        grant_on(self.soils_2024, user=self.alice)
-        self.login(self.alice)
-        page = self.client.get('/search/', {'q': 'Soils'}).content.decode()
-        self.assertRegex(page, r'0 files • 1 folder\s*<')
-        self.assertNotIn('2 folders', page)
-        self.assertNotIn('1 file ', page)
 
 
 class Pluralization(VisibleCountsTree):

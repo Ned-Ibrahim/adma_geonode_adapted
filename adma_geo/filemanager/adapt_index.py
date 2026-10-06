@@ -322,15 +322,16 @@ def _visible_counts(user, rels, run):
 
 # ----------------------------------------------------------------- search
 
-def search(user, query, kind=None, limit=50) -> list:
+def search(user, query, kind=None, limit=50, file_type=None) -> list:
     """Folders and files whose name contains `query`, without case, that `user` may see.
 
     `kind` is 'file', 'folder' or None for both; an empty query matches every
-    name. Exact names come first, then names that start with the query, then
-    the rest by name. Each hit is a dict: name, path, is_dir, size (a folder's
-    total), mtime and url, the address that opens it on the share. The index
-    can be a day old, so a hit may be gone from the share; its address then
-    answers 404.
+    name. A `file_type` (as File.file_type, such as 'gis') finds only files of
+    that type. Exact names come first, then names that start with the query,
+    then the rest by name. Each hit is a dict: name, path, is_dir, size (a
+    folder's total), mtime, file_type ('' for a folder) and url, the address
+    that opens it on the share. The index can be a day old, so a hit may be
+    gone from the share; its address then answers 404.
     """
     if kind not in (None, 'file', 'folder'):
         raise ValueError(f'kind is "file", "folder" or None, not {kind!r}')
@@ -340,6 +341,8 @@ def search(user, query, kind=None, limit=50) -> list:
     entries = AdaptEntry.objects.filter(visible)
     if kind:
         entries = entries.filter(is_dir=(kind == 'folder'))
+    if file_type:
+        entries = entries.filter(is_dir=False, file_type=file_type)
     query = (query or '').strip()
     if query:
         entries = entries.filter(name__icontains=query).annotate(rank=Case(
@@ -355,6 +358,7 @@ def search(user, query, kind=None, limit=50) -> list:
         'is_dir': entry.is_dir,
         'size': entry.total_size if entry.is_dir else entry.size,
         'mtime': entry.mtime,
+        'file_type': entry.file_type,
         'url': adapt_share.folder_url(entry.path) if entry.is_dir else adapt_share.file_url(entry.path),
     } for entry in entries[:limit]]
 

@@ -19,7 +19,6 @@ from rest_framework.authtoken.models import Token
 
 from filemanager import permissions
 from filemanager.models import File, Folder, FolderGrant
-from filemanager.search_engine import search_engine
 
 User = get_user_model()
 
@@ -203,52 +202,6 @@ class WebPages(GrantTree):
         for path in (f'/public/folder/{self.grazing.id}/', f'/public/file/{self.grazing_file.id}/'):
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 404)
-
-    def test_search_never_returns_ungranted_adapt_rows(self):
-        Folder.objects.filter(pk=self.grazing.pk).update(is_public=True)
-        Folder.objects.create(name='Grazing notes', owner=self.alice, is_public=True)
-        results = search_engine.search(self.fresh(self.bob), query='Grazing', content_type='folder')
-        names = [r['name'] for r in results]
-        self.assertIn('Grazing notes', names)
-        self.assertNotIn('Grazing Systems', names)
-
-
-class Search(GrantTree):
-
-    def names(self, user, query, content_type):
-        return {r['name'] for r in search_engine.search(self.fresh(user), query=query, content_type=content_type)}
-
-    def test_a_granted_user_finds_files_anywhere_in_their_subtree(self):
-        self.assertEqual(self.names(self.alice, 'cores', 'file'), {'soil_cores.csv', 'cores_2024.csv'})
-
-    def test_files_outside_the_grant_are_never_found(self):
-        for query in ('paddocks', 'tower', 'share_readme'):
-            with self.subTest(query=query):
-                self.assertEqual(self.names(self.alice, query, 'file'), set())
-
-    def test_folders_found_are_the_granted_branch_and_the_way_to_it(self):
-        self.assertEqual(self.names(self.alice, '2024', 'folder'), {'2024'})
-        self.assertEqual(self.names(self.alice, 'Grazing', 'folder'), set())
-        self.assertEqual(self.names(self.alice, 'ADAPT', 'folder'), {'ADAPT'})
-
-    def test_a_group_grant_is_searchable_by_its_members(self):
-        self.assertEqual(self.names(self.carol, 'tower', 'file'), {'tower.csv'})
-
-    def test_no_grant_finds_no_adapt_rows(self):
-        for query in ('cores', 'paddocks', 'ADAPT', 'Soils'):
-            with self.subTest(query=query):
-                self.assertEqual(self.names(self.bob, query, None), set())
-
-    def test_superusers_find_everything(self):
-        self.assertEqual(self.names(self.admin, 'csv', 'file'),
-                         {'soil_cores.csv', 'cores_2024.csv', 'paddocks.csv', 'tower.csv'})
-
-    def test_the_search_page_shows_granted_results_only(self):
-        self.client.force_login(self.alice)
-        response = self.client.get('/search/', {'q': 'csv'})
-        self.assertContains(response, 'soil_cores.csv')
-        self.assertNotContains(response, 'paddocks.csv')
-        self.assertNotContains(response, 'tower.csv')
 
 
 class TokenApi(GrantTree):

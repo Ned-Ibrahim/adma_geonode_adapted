@@ -363,7 +363,11 @@ class File(models.Model):
 
     def get_size_display(self):
         """Return human-readable file size"""
-        size = self.file_size
+        return self.describe_size(self.file_size)
+
+    @staticmethod
+    def describe_size(size):
+        """A size in bytes as people read it, for example "2.5 MB"."""
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if size < 1024:
                 return f"{size:.1f} {unit}"
@@ -372,17 +376,22 @@ class File(models.Model):
 
     def get_icon_class(self):
         """Return FontAwesome icon class based on file type"""
-        if self.file_type == 'image':
+        return self.icon_class_for(self.file_type)
+
+    @staticmethod
+    def icon_class_for(file_type):
+        """The FontAwesome icon class for a file of `file_type`."""
+        if file_type == 'image':
             return 'fas fa-image image-icon'
-        elif self.file_type == 'text':
+        elif file_type == 'text':
             return 'fas fa-file-code text-icon'
-        elif self.file_type == 'csv':
+        elif file_type == 'csv':
             return 'fas fa-table csv-icon'
-        elif self.file_type == 'spreadsheet':
+        elif file_type == 'spreadsheet':
             return 'fas fa-file-excel spreadsheet-icon'
-        elif self.file_type == 'document':
+        elif file_type == 'document':
             return 'fas fa-file-alt document-icon'
-        elif self.file_type == 'gis':
+        elif file_type == 'gis':
             return 'fas fa-map-marked-alt gis-icon'
         else:
             return 'fas fa-file file-icon'

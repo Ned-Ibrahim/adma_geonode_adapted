@@ -7,15 +7,16 @@ import os
 import shutil
 import tempfile
 from io import StringIO
-from unittest import mock, skip
+from unittest import mock
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser, Group
 from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 
 from filemanager import adapt_index, adapt_share
-from filemanager.models import AdaptEntry, AdaptIndexRun, FolderGrant
+from filemanager.models import AdaptEntry, AdaptIndexRun, File, Folder, FolderGrant
 from filemanager.search_engine import search_engine
 
 User = get_user_model()
@@ -292,40 +293,102 @@ class Search(IndexCase):
         self.build()
         self.assertNotIn('Soils Archive/old.csv', self.paths(self.alice, 'old'))
 
+    def test_a_file_type_finds_only_files_of_that_type(self):
+        hits = adapt_index.search(self.fresh(self.alice), '', file_type='gis')
+        self.assertEqual([hit['path'] for hit in hits], ['Soils/2024/plots.geojson'])
+        self.assertEqual(adapt_index.search(self.fresh(self.alice), '2024', file_type='csv'), [])
+
     def test_hits_carry_their_address(self):
         hit = adapt_index.search(self.fresh(self.alice), 'cores')[0]
         self.assertEqual(hit['url'], adapt_share.file_url('Soils/cores.csv'))
-        self.assertEqual((hit['name'], hit['is_dir'], hit['size']), ('cores.csv', False, len(TREE['Soils/cores.csv'])))
+        self.assertEqual((hit['name'], hit['is_dir'], hit['size'], hit['file_type']),
+                         ('cores.csv', False, len(TREE['Soils/cores.csv']), 'csv'))
         folder = adapt_index.search(self.fresh(self.alice), '2024', 'folder')[0]
         self.assertEqual(folder['url'], adapt_share.folder_url('Soils/2024'))
 
 
-@skip('search wiring lands in the next step')
 class SearchWiring(IndexCase):
-    """Search page, suggestions API and search engine, reading the index."""
+    """Search page, suggestions API and search engine, reading the index.
+
+    ADAPT hits come only from the index; File and Folder rows from the share
+    are never searched. dave: read grant on Grazing Systems through a group.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.dave = User.objects.create_user('dave', password='pw')
+        grazing_team = Group.objects.create(name='grazing-team')
+        cls.dave.groups.add(grazing_team)
+        FolderGrant.objects.create(path='Grazing Systems', group=grazing_team)
 
     def setUp(self):
         super().setUp()
         self.build()
 
+    def names(self, user, query, content_type=None, **filters):
+        return {r['name'] for r in search_engine.search(self.fresh(user), query=query, content_type=content_type, **filters)}
+
     def test_the_search_engine_returns_adapt_hits_for_granted_users_only(self):
         names = {r['name'] for r in search_engine.search(self.fresh(self.alice), query='csv')}
         self.assertEqual(names, {'cores.csv', 'ph.csv'})
         self.assertEqual(search_engine.search(self.fresh(self.bob), query='csv'), [])
+        self.assertEqual(search_engine.search(AnonymousUser(), query='csv'), [])
+
+    def test_files_outside_the_grant_are_never_found(self):
+        for query in ('paddocks', 'tower', 'top'):
+            with self.subTest(query=query):
+                self.assertEqual(self.names(self.alice, query), set())
+
+    def test_folders_on_the_way_to_a_grant_are_found(self):
+        results = search_engine.search(self.fresh(self.carol), query='e', content_type='folder')
+        self.assertEqual({(r['name'], r['type']) for r in results},
+                         {('Flux Measurements', 'adapt_folder'), ('Tower', 'adapt_folder')})
+        self.assertEqual(self.names(self.carol, 'Grazing', 'folder'), set())
+
+    def test_a_group_grant_is_searchable_by_its_members(self):
+        self.assertEqual(self.names(self.dave, 'csv', 'file'), {'paddocks.csv'})
+
+    def test_superusers_find_everything(self):
+        self.assertEqual(self.names(self.admin, 'csv', 'file'),
+                         {'cores.csv', 'ph.csv', 'paddocks.csv', 'tower.csv'})
 
     def test_adapt_hits_are_never_public(self):
         self.assertEqual(search_engine.search(self.fresh(self.admin), query='csv', is_public=True), [])
+        self.assertEqual(self.names(self.alice, 'csv', is_public=False), {'cores.csv', 'ph.csv'})
 
     def test_the_file_type_filter_applies(self):
         names = {r['name'] for r in search_engine.search(self.fresh(self.alice), query=None, file_type='gis')}
         self.assertEqual(names, {'plots.geojson'})
+
+    def test_hits_carry_their_address_path_and_size(self):
+        hit, = search_engine.search(self.fresh(self.alice), query='cores')
+        self.assertEqual((hit['type'], hit['url']), ('adapt_file', adapt_share.file_url('Soils/cores.csv')))
+        self.assertEqual(hit['metadata']['path'], 'Soils/cores.csv')
+        self.assertEqual(hit['metadata']['size'], '13.0 B')
+        self.assertFalse(hit['metadata']['is_public'])
+
+    def test_rows_from_the_share_are_never_searched(self):
+        # Records of ADAPT files, and folder rows from the old sync, even public or owned by the searcher.
+        Folder.objects.create(name='Grazing Systems', owner=self.alice, is_public=True,
+                              is_third_party=True, third_party_source='adapt', third_party_id='Grazing Systems')
+        File.objects.bulk_create([File(
+            name='cores.csv', file='adapt/cores.csv', owner=self.alice, file_size=10, is_public=True,
+            is_third_party=True, third_party_source='adapt', third_party_id='Soils/cores.csv')])
+        Folder.objects.create(name='Grazing notes', owner=self.alice, is_public=True)
+        self.assertEqual(self.names(self.bob, 'Grazing', 'folder'), {'Grazing notes'})
+        self.assertEqual({r['name'] for r in search_engine.search(AnonymousUser(), query='Grazing')}, {'Grazing notes'})
+        hits = search_engine.search(self.fresh(self.alice), query='cores')
+        self.assertEqual([(r['name'], r['type']) for r in hits], [('cores.csv', 'adapt_file')])
 
     def test_the_search_page_links_to_the_share(self):
         self.client.force_login(self.alice)
         response = self.client.get('/search/', {'q': 'csv'})
         self.assertContains(response, 'cores.csv')
         self.assertContains(response, adapt_share.file_url('Soils/cores.csv'))
+        self.assertContains(response, 'ADAPT/Soils/2024')
         self.assertNotContains(response, 'paddocks.csv')
+        self.assertNotContains(response, 'tower.csv')
 
     def test_the_search_page_shows_folder_totals(self):
         self.client.force_login(self.alice)
@@ -333,8 +396,25 @@ class SearchWiring(IndexCase):
         self.assertContains(response, adapt_share.folder_url('Soils/2024'))
         self.assertContains(response, '2 files')
 
+    def test_a_folder_on_the_way_to_a_grant_counts_only_that_branch(self):
+        self.write('Flux Measurements/Chamber/chamber.csv')
+        self.write('Flux Measurements/notes.txt')
+        self.build()
+        self.client.force_login(self.carol)
+        page = self.client.get('/search/', {'q': 'Flux', 'type': 'folder'}).content.decode()
+        self.assertIn('1 folder, 1 file', page)
+        self.assertNotIn('2 folders', page)
+
+    def test_ordinary_folders_keep_their_counts(self):
+        notes = Folder.objects.create(name='Soil notes', owner=self.alice)
+        Folder.objects.create(name='Field', owner=self.alice, parent=notes)
+        self.client.force_login(self.alice)
+        page = self.client.get('/search/', {'q': 'Soil notes'}).content.decode()
+        self.assertIn(notes.get_absolute_url(), page)
+        self.assertRegex(page, r'0 files • 1 folder\s*<')
+
     def test_search_suggestions_link_to_the_share(self):
         self.client.force_login(self.alice)
         suggestions = self.client.get('/api/search/', {'q': 'cores'}).json()['suggestions']
-        self.assertEqual([(s['name'], s['url']) for s in suggestions],
-                         [('cores.csv', adapt_share.file_url('Soils/cores.csv'))])
+        self.assertEqual([(s['name'], s['url'], s['path']) for s in suggestions],
+                         [('cores.csv', adapt_share.file_url('Soils/cores.csv'), 'Soils/cores.csv')])
