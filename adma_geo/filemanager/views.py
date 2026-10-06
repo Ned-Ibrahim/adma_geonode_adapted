@@ -474,12 +474,13 @@ def dashboard(request):
     ).exclude(third_party_source='adapt').order_by('third_party_source', 'name')
     adapt_entry = None
     if permissions.can_read_path(user, ''):
-        # The share is listed live at /adapt/; counts come from the search index when there is one.
+        # The share is listed live at /adapt/; counts come from the search index once it has run.
+        # Before the first run there are none to show, rather than "Empty", as on the folder page.
         index = adapt_views.index_module()
-        adapt_entry = {
-            'url': adapt_share.folder_url(''),
-            'summary': Folder.describe_contents(*index.visible_totals(user, '')) if index else '',
-        }
+        summary = ''
+        if index is not None and index.indexed_at() is not None:
+            summary = Folder.describe_contents(*index.visible_totals(user, ''))
+        adapt_entry = {'url': adapt_share.folder_url(''), 'summary': summary}
     
     third_party_files = File.objects.filter(
         is_third_party=True,

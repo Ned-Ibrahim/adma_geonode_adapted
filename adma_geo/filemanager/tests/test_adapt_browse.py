@@ -345,11 +345,20 @@ class DashboardEntry(BrowseCase):
         self.assertNotContains(self.get(self.stranger, '/dashboard/'), self.ENTRY)
 
     def test_counts_come_from_the_index_for_what_the_user_may_see(self):
-        with fake_index(totals=(1, 70)):
+        with fake_index(totals=(1, 70), when=datetime(2026, 10, 6, 7, 0, tzinfo=timezone.utc)):
             page = self.get(self.reader, '/dashboard/')
             visible_totals = sys.modules['filemanager.adapt_index'].visible_totals
         self.assertContains(page, '1 folder, 70 files')
         self.assertEqual(visible_totals.call_args.args[1:], ('',))
+
+    def test_before_the_first_index_run_the_entry_has_no_counts(self):
+        # The index answers (0, 0) until it has run; that is not an empty share.
+        with fake_index(totals=(0, 0), when=None):
+            page = self.get(self.reader, '/dashboard/')
+            visible_totals = sys.modules['filemanager.adapt_index'].visible_totals
+        self.assertContains(page, self.ENTRY)
+        self.assertNotContains(page, '>Empty<')
+        visible_totals.assert_not_called()
 
     def test_without_an_index_the_entry_has_no_counts(self):
         with NO_INDEX:
