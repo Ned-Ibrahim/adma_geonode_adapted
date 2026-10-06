@@ -142,6 +142,17 @@ def granted_paths(user) -> Optional[List[str]]:
     return ['/'.join(key) for key in _grants(user).read]
 
 
+def granted_below(user, rel) -> List[str]:
+    """The granted folders beneath folder `rel` that no other grant covers from above, as path keys joined with "/".
+
+    For a folder the user opens only on the way to a grant: what lies below it
+    that the user may read in full.
+    """
+    if rel is None or not _signed_in(user):
+        return []
+    return ['/'.join(key) for key in _grants(user).topmost_below(adapt_share.key(rel))]
+
+
 # --------------------------------------------------------------- by object
 
 def can_read(user, obj) -> bool:

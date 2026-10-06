@@ -1860,3 +1860,23 @@ def sync_johndeere_scheduled():
     """
     logger.info("Running scheduled John Deere sync...")
     return sync_johndeere_task.delay()
+
+
+@shared_task
+def index_adapt_task():
+    """Rebuild the ADAPT index that search and folder totals read (see filemanager.adapt_index).
+
+    Celery beat runs this every night. A missing or empty mount fails the task
+    and leaves the index as it was.
+    """
+    from . import adapt_index
+    run = adapt_index.build()
+    logger.info(f"ADAPT index: {run.files} files in {run.folders} folders, "
+                f"{run.removed} dropped, {run.errors} errors")
+    return {
+        'files': run.files,
+        'folders': run.folders,
+        'removed': run.removed,
+        'errors': run.errors,
+        'failed_folders': run.failed_folders.splitlines(),
+    }

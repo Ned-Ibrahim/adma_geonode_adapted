@@ -155,6 +155,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'filemanager.tasks.sync_johndeere_task',
         'schedule': crontab(hour=3, minute=0),  # Run at 3:00 AM daily
     },
+    'index-adapt-nightly': {
+        'task': 'filemanager.tasks.index_adapt_task',
+        'schedule': crontab(hour=1, minute=0),  # Rebuild the ADAPT search and totals index at 1:00 AM
+    },
 }
 
 # Realm5 API Configuration
