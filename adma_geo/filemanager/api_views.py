@@ -11,8 +11,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
-from django.http import FileResponse, Http404, HttpResponse
-from django.shortcuts import get_object_or_404
+from django.http import FileResponse, HttpResponse
 from django.db import transaction
 from contextlib import nullcontext
 import zipfile
@@ -29,8 +28,7 @@ from .middleware import PASSWORD_CHANGE_MESSAGE
 from .models import File, Folder, must_change_password
 from . import adapt_share, adapt_storage, adapt_views, permissions
 from .serializers import (
-    FileUploadSerializer, FolderUploadSerializer, FileDownloadSerializer,
-    FolderDownloadSerializer, TokenCreateSerializer, FileSerializer, FolderSerializer
+    FileUploadSerializer, FolderUploadSerializer, TokenCreateSerializer, FileSerializer, FolderSerializer
 )
 from .views import UploadRefused, adapt_file_json, adapt_folder_json, generate_unique_name, upload_target
 from .tasks import process_gis_file_task
@@ -614,7 +612,7 @@ def api_download_folder(request, folder_id):
                         file_count += 1
                         total_size += file_obj.file_size
                         
-                    except Exception as e:
+                    except Exception:
                         # Skip files that can't be read, but continue with others
                         continue
                 
