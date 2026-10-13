@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y \
     libmagic1 \
     gdal-bin \
     libgdal-dev \
-    python3-gdal \
     libgeos-dev \
     libproj-dev \
     proj-data \
