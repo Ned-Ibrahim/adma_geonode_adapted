@@ -1,8 +1,11 @@
-"""How file sizes and file types read on the pages."""
+"""How file sizes, file types and ages read on the pages."""
+from datetime import timedelta
+
 from django.test import SimpleTestCase
+from django.utils import timezone
 
 from filemanager.models import File
-from filemanager.templatetags.file_display import file_type_label
+from filemanager.templatetags.file_display import ago, file_type_label
 
 
 class FileDisplayTests(SimpleTestCase):
@@ -16,3 +19,9 @@ class FileDisplayTests(SimpleTestCase):
         for file_type, shown in (('gis', 'GIS'), ('csv', 'CSV'), ('spreadsheet', 'Spreadsheet'),
                                  ('image', 'Image'), ('other', 'Other'), ('', '')):
             self.assertEqual(file_type_label(file_type), shown)
+
+    def test_under_a_minute_is_just_now(self):
+        now = timezone.now()
+        self.assertEqual(ago(now), 'just now')
+        self.assertEqual(ago(now - timedelta(seconds=59)), 'just now')
+        self.assertEqual(ago(now - timedelta(minutes=3, seconds=5)), '3\xa0minutes ago')

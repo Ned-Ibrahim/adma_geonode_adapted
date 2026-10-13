@@ -452,7 +452,7 @@
                     <h6>File Details</h6>
                     <ul class="list-unstyled">
                         <li><i class="fas fa-file me-2"></i>{{ file.get_size_display }}</li>
-                        <li><i class="fas fa-calendar me-2"></i>{{ file.created_at|timesince }} ago</li>
+                        <li><i class="fas fa-calendar me-2"></i>{{ file.created_at|ago }}</li>
                         <li><i class="fas fa-user me-2"></i>{{ file.owner.username }}</li>
                         {% if file.is_public %}
                         <li><i class="fas fa-globe me-2"></i>Public file</li>
