@@ -33,6 +33,10 @@ from .adapt_storage import ROOT_SENTINEL
 from .models import File, Folder, FolderGrant
 
 ADAPT_DELETE_MESSAGE = 'Files and folders on the ADAPT share cannot be deleted from ADMA.'
+ADAPT_OWNER_MESSAGE = (
+    'Deleting a user deletes the files and folders they own, and ADAPT content is never deleted from ADMA. '
+    'Reassign their ADAPT rows to another user first.'
+)
 
 
 def _is_adapt(obj) -> bool:
@@ -211,6 +215,19 @@ def touches_adapt(objects: Iterable) -> bool:
             return True
         level = set(children.values_list('pk', flat=True)) - seen
     return False
+
+
+def owns_adapt(users) -> bool:
+    """True if deleting these users would delete an ADAPT row.
+
+    Their Files and Folders are deleted with them, so this is touches_adapt
+    over everything they own. Asking the database for an ADAPT row among those
+    first spares loading the lot for the owner of the ADAPT root.
+    """
+    adapt = Q(is_third_party=True, third_party_source='adapt')
+    if File.objects.filter(adapt, owner__in=users).exists() or Folder.objects.filter(adapt, owner__in=users).exists():
+        return True
+    return touches_adapt(Folder.objects.filter(owner__in=users))
 
 
 class FolderCounts:

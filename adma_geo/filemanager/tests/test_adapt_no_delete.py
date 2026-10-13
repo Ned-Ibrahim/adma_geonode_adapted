@@ -242,6 +242,62 @@ class Admin(NoDeleteCase):
         self.assertEqual(list(File.objects.all()), [record])
 
 
+
+class AdminUsers(NoDeleteCase):
+    """Deleting a user deletes what they own, so a user who owns ADAPT rows is not deleted."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+        self.record = adapt_records.record_for('Soils/cores.csv')
+
+    def user_url(self, user, view):
+        return reverse(f'admin:auth_user_{view}', args=[user.pk])
+
+    def bulk_delete(self, users):
+        data = {'action': 'delete_selected', '_selected_action': [str(u.pk) for u in users], 'post': 'yes'}
+        return self.client.post(reverse('admin:auth_user_changelist'), data, follow=True)
+
+    def assertAdaptKept(self):
+        self.assertTrue(Folder.objects.filter(pk=self.root.pk).exists())
+        self.assertTrue(File.objects.filter(pk=self.record.pk).exists())
+
+    def test_the_owner_of_the_adapt_root_is_not_deleted(self):
+        url = self.user_url(self.sync_user, 'delete')
+        for response in (self.client.get(url, follow=True), self.client.post(url, {'post': 'yes'}, follow=True)):
+            self.assertRedirects(response, self.user_url(self.sync_user, 'change'))
+            self.assertContains(response, 'Reassign their ADAPT rows to another user first.')
+        self.assertTrue(User.objects.filter(pk=self.sync_user.pk).exists())
+        self.assertAdaptKept()
+
+    def test_owning_one_adapt_record_or_a_folder_above_one_is_enough(self):
+        mine = adapt_records.record_for('Flux/tower.csv', owner=self.flux_member)
+        self.adapt_file_in(Folder.objects.create(name='Mine', owner=self.writer))
+        for user in (self.flux_member, self.writer):
+            with self.subTest(user=user.username):
+                response = self.client.post(self.user_url(user, 'delete'), {'post': 'yes'}, follow=True)
+                self.assertContains(response, 'Reassign their ADAPT rows to another user first.')
+                self.assertTrue(User.objects.filter(pk=user.pk).exists())
+        self.assertTrue(File.objects.filter(pk=mine.pk).exists())
+
+    def test_a_bulk_delete_with_such_a_user_deletes_nobody(self):
+        response = self.bulk_delete([self.sync_user, self.stranger])
+        self.assertContains(response, 'Nothing was deleted: the selection includes a user who owns ADAPT content.')
+        self.assertContains(response, 'Reassign their ADAPT rows to another user first.')
+        self.assertEqual(User.objects.filter(pk__in=[self.sync_user.pk, self.stranger.pk]).count(), 2)
+        self.assertAdaptKept()
+
+    def test_other_users_are_still_deleted(self):
+        File.objects.create(name='mine.txt', owner=self.stranger)
+        response = self.client.post(self.user_url(self.stranger, 'delete'), {'post': 'yes'}, follow=True)
+        self.assertContains(response, 'was deleted successfully')
+        self.assertFalse(User.objects.filter(pk=self.stranger.pk).exists())
+        response = self.bulk_delete([self.reader])
+        self.assertContains(response, 'Successfully deleted 1 user.')
+        self.assertFalse(User.objects.filter(pk=self.reader.pk).exists())
+        self.assertAdaptKept()
+
+
 class OwnersStillDelete(NoDeleteCase):
     """Everything outside ADAPT keeps Delete for its owner, as before."""
 
