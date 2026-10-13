@@ -62,7 +62,7 @@
         content: ", ";
     }
     
-    /* Attribution banner stretching full width at bottom of map */
+    /* Attribution band stretching full width at bottom of map, light as on the custom Map page */
     #map .ol-attribution {
         position: absolute !important;
         bottom: 0px !important;
@@ -71,20 +71,17 @@
         top: auto !important;
         width: 100% !important;
         transform: none !important;
-        background: rgba(0, 0, 0, 0.8) !important;
-        color: white !important;
+        background: rgba(255, 255, 255, 0.8) !important;
         border-radius: 0 !important;
-        padding: 8px 16px !important;
-        font-size: 12px !important;
+        padding: 4px !important;
+        font-size: 11px !important;
         max-width: none !important;
         white-space: nowrap !important;
         overflow: hidden !important;
         text-overflow: ellipsis !important;
-        box-shadow: 0 -2px 8px rgba(0,0,0,0.2) !important;
         z-index: 1000 !important;
         margin: 0 !important;
         text-align: center !important;
-        border-top: 1px solid rgba(255,255,255,0.1) !important;
     }
     
     #map .ol-attribution ul {
@@ -101,16 +98,6 @@
     
     #map .ol-attribution li:not(:last-child):after {
         content: ", ";
-    }
-    
-    #map .ol-attribution a {
-        color: #87ceeb !important;
-        text-decoration: none !important;
-    }
-    
-    #map .ol-attribution a:hover {
-        color: white !important;
-        text-decoration: underline !important;
     }
     
     /* Zoom controls positioned at top-right - override OpenLayers defaults */
@@ -148,7 +135,7 @@
     /* Scale line positioning - adjusted for full-width attribution banner */
     #map .ol-scale-line {
         position: absolute !important;
-        bottom: 45px !important;
+        bottom: 34px !important;
         left: 10px !important;
         right: auto !important;
         top: auto !important;
