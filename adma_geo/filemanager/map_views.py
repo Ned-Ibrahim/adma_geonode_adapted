@@ -11,16 +11,12 @@ import json
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.views.generic import ListView, DetailView, CreateView
+from django.views.generic import ListView, DetailView
 from django.http import JsonResponse, HttpResponseForbidden
 from django.db import models
 from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
 from django.contrib import messages
 from django.db import transaction, IntegrityError
-from django.db import models
-from django.core.paginator import Paginator
 
 from .models import Map, MapLayer, File
 from .geoserver_layer_group_manager import LayerGroupManager
@@ -356,40 +352,6 @@ def check_map_name(request):
 
 
 @login_required
-@require_http_methods(["POST"])
-def toggle_map_visibility(request, map_id):
-    """Toggle map visibility between private and public"""
-    try:
-        map_obj = get_object_or_404(Map, id=map_id, owner=request.user)
-        
-        import json
-        data = json.loads(request.body)
-        is_public = data.get('is_public', False)
-        
-        map_obj.is_public = is_public
-        map_obj.save(update_fields=['is_public'])
-        
-        # Regenerate embeddings since visibility changed
-        try:
-            from .tasks import generate_map_embedding_task
-            generate_map_embedding_task.delay(str(map_obj.id))
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to regenerate embeddings for map {map_obj.name}: {e}")
-        
-        status = 'public' if is_public else 'private'
-        return JsonResponse({
-            'success': True, 
-            'message': f'Map "{map_obj.name}" is now {status}',
-            'is_public': is_public
-        })
-        
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)})
-
-
-@login_required
 def get_available_layers(request, map_id):
     """Get available spatial files that can be added to the map"""
     try:
@@ -585,11 +547,12 @@ def update_layer_visibility(request, map_id, layer_id):
 @login_required
 @require_http_methods(["DELETE"])
 def delete_map(request, map_id):
-    """Delete a map"""
+    """Delete one of the user's maps. Errors come back as JSON with a 404 or 500 status, which the pages show."""
+    map_obj = Map.objects.filter(id=map_id, owner=request.user).first()
+    if map_obj is None:
+        return JsonResponse({'success': False, 'error': 'Map not found'}, status=404)
+    map_name = map_obj.name
     try:
-        map_obj = get_object_or_404(Map, id=map_id, owner=request.user)
-        map_name = map_obj.name
-        
         # Mark as deletion in progress to hide from queries
         map_obj.deletion_in_progress = True
         map_obj.save(update_fields=['deletion_in_progress'])
@@ -600,7 +563,9 @@ def delete_map(request, map_id):
         return JsonResponse({'success': True, 'message': f'Map "{map_name}" deleted successfully'})
         
     except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)})
+        # The map is still there, so list it again.
+        Map.objects.filter(pk=map_obj.pk).update(deletion_in_progress=False)
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
 @login_required

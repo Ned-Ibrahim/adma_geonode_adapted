@@ -97,6 +97,19 @@ class DeleteEndpoint(NoDeleteCase):
         delay.assert_not_called()
         self.assertKept(record)
 
+    def test_a_malformed_id_is_a_404(self):
+        self.client.force_login(self.writer)
+        for kind in ('file', 'folder'):
+            for bad in ('not-a-uuid', {'id': 1}):
+                with self.subTest(kind=kind, id=bad):
+                    response = self.client.post(
+                        reverse('filemanager:delete_item'),
+                        data=json.dumps({'type': kind, 'id': bad}),
+                        content_type='application/json',
+                    )
+                    self.assertEqual(response.status_code, 404, response.content)
+                    self.assertEqual(response.json()['error'], 'Not found')
+
     def test_a_folder_of_ones_own_with_adapt_rows_beneath_it_is_refused(self):
         mine = Folder.objects.create(name='Mine', owner=self.writer)
         inner = Folder.objects.create(name='Inner', owner=self.writer, parent=mine)
@@ -190,6 +203,30 @@ class Pages(NoDeleteCase):
         # Other third-party files and one's own uploads keep it, in the list and the panels.
         self.assertContains(response, f"deleteItem('file', '{other_source.id}'", count=2)
         self.assertContains(response, f"deleteItem('file', '{own.id}'", count=2)
+
+
+    def test_the_dashboard_offers_no_delete_on_others_public_third_party_rows(self):
+        theirs_file = File.objects.create(
+            name='station.json', owner=self.writer, is_third_party=True, third_party_source='realm5', is_public=True,
+        )
+        theirs_folder = Folder.objects.create(
+            name='Fields', owner=self.writer, is_third_party=True, third_party_source='johndeere', is_public=True,
+        )
+        mine_file = File.objects.create(
+            name='rain.json', owner=self.reader, is_third_party=True, third_party_source='realm5',
+        )
+        mine_folder = Folder.objects.create(
+            name='Farms', owner=self.reader, is_third_party=True, third_party_source='johndeere',
+        )
+        self.client.force_login(self.reader)
+        response = self.client.get(reverse('filemanager:dashboard'))
+        # Both are listed, in the list and the panels, but delete_item would answer 404.
+        self.assertContains(response, f'data-file-id="{theirs_file.id}"', count=2)
+        self.assertContains(response, f'data-folder-id="{theirs_folder.id}"', count=2)
+        self.assertNotContains(response, f"deleteItem('file', '{theirs_file.id}'")
+        self.assertNotContains(response, f"deleteItem('folder', '{theirs_folder.id}'")
+        self.assertContains(response, f"deleteItem('file', '{mine_file.id}'", count=2)
+        self.assertContains(response, f"deleteItem('folder', '{mine_folder.id}'", count=2)
 
 
 class Admin(NoDeleteCase):
@@ -359,6 +396,27 @@ class Maps(NoDeleteCase):
         self.assertTrue(response.json()['success'], response.content)
         self.assertFalse(MapLayer.objects.filter(pk=layer.pk).exists())
         self.assertTrue(File.objects.filter(pk=record.pk).exists())
+
+    def test_a_map_that_is_missing_or_someone_elses_is_a_404(self):
+        theirs = Map.objects.create(name='Theirs', owner=self.reader)
+        self.client.force_login(self.writer)
+        for map_id in (theirs.id, '00000000-0000-0000-0000-000000000000'):
+            with self.subTest(map_id=map_id):
+                response = self.client.delete(reverse('filemanager:delete_map', args=[map_id]))
+                self.assertEqual(response.status_code, 404, response.content)
+                self.assertEqual(response.json(), {'success': False, 'error': 'Map not found'})
+        theirs.refresh_from_db()
+        self.assertFalse(theirs.deletion_in_progress)
+
+    def test_a_failed_map_delete_is_a_500_and_leaves_the_map_listed(self):
+        the_map = Map.objects.create(name='Fields', owner=self.writer)
+        self.client.force_login(self.writer)
+        with mock.patch.object(Map, 'delete', side_effect=RuntimeError('database is down')):
+            response = self.client.delete(reverse('filemanager:delete_map', args=[the_map.id]))
+        self.assertEqual(response.status_code, 500, response.content)
+        self.assertEqual(response.json(), {'success': False, 'error': 'database is down'})
+        the_map.refresh_from_db()
+        self.assertFalse(the_map.deletion_in_progress)
 
     def test_the_dashboard_deletes_a_map_through_delete_map(self):
         the_map = Map.objects.create(name='Fields', owner=self.writer)

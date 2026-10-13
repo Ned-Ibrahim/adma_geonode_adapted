@@ -486,6 +486,10 @@ def dashboard(request):
     ).filter(
         Q(owner=user) | Q(is_public=True)  # User's own OR public
     ).distinct().order_by('third_party_source', '-created_at')
+    # Delete is offered only where delete_item would allow it: others' public rows and ADAPT rows get none.
+    deletable_ids = {
+        item.id for item in chain(third_party_folders, third_party_files) if permissions.can_delete(user, item)
+    }
     
     return render(request, 'filemanager/dashboard.html', {
         'folders': folders,
@@ -500,6 +504,7 @@ def dashboard(request):
         # Third-party data panel
         'third_party_folders': third_party_folders,
         'third_party_files': third_party_files,
+        'deletable_ids': deletable_ids,
         'adapt_entry': adapt_entry,
         'total_third_party_folders': third_party_folders.count() + (1 if adapt_entry else 0),
         'total_third_party_files': third_party_files.count(),
@@ -1597,6 +1602,14 @@ def _delete_refusal(user, item):
     return None
 
 
+def _find(model, item_id):
+    """The `model` row with this id, or None for a missing or malformed id: both are a 404 to the client."""
+    try:
+        return model.objects.filter(id=item_id).first()
+    except (ValueError, ValidationError):
+        return None
+
+
 @login_required
 def delete_item(request):
     """Delete file or folder via AJAX - async with immediate response"""
@@ -1607,7 +1620,7 @@ def delete_item(request):
             item_id = data.get('id')
             
             if item_type == 'file':
-                item = File.objects.filter(id=item_id).first()
+                item = _find(File, item_id)
                 if item is None:
                     return JsonResponse({'error': 'Not found'}, status=404)
                 item_name = item.name
@@ -1632,7 +1645,7 @@ def delete_item(request):
                 })
                 
             elif item_type == 'folder':
-                item = Folder.objects.filter(id=item_id).first()
+                item = _find(Folder, item_id)
                 if item is None:
                     return JsonResponse({'error': 'Not found'}, status=404)
                 item_name = item.name
