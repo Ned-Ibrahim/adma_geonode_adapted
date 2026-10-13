@@ -303,3 +303,12 @@ class Maps(NoDeleteCase):
         self.assertTrue(response.json()['success'], response.content)
         self.assertFalse(MapLayer.objects.filter(pk=layer.pk).exists())
         self.assertTrue(File.objects.filter(pk=record.pk).exists())
+
+    def test_the_dashboard_deletes_a_map_through_delete_map(self):
+        the_map = Map.objects.create(name='Fields', owner=self.writer)
+        self.client.force_login(self.writer)
+        page = self.client.get(reverse('filemanager:dashboard')).content.decode()
+        self.assertIn(f"deleteMap('{the_map.id}'", page)
+        # delete_item knows no 'map' type and answered 400 to the old call.
+        self.assertNotIn("type: 'map'", page)
+        self.assertIn(reverse('filemanager:delete_map', args=['00000000-0000-0000-0000-000000000000']), page)

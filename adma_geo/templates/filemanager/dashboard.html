@@ -729,7 +729,7 @@
                                                 <li><a class="dropdown-item" href="{% url 'filemanager:download_file' file.id %}">
                                                     <i class="fas fa-download me-2"></i>Download
                                                 </a></li>
-                                                {% if file.third_party_url %}
+                                                {% if file.third_party_url and not file.is_adapt %}
                                                 <li><a class="dropdown-item" href="{{ file.third_party_url }}" target="_blank">
                                                     <i class="fas fa-external-link-alt me-2"></i>View on {{ file.third_party_source|default:"Source" }}
                                                 </a></li>
@@ -856,7 +856,7 @@
                                                 <li><a class="dropdown-item" href="{% url 'filemanager:download_file' file.id %}">
                                                     <i class="fas fa-download me-2"></i>Download
                                                 </a></li>
-                                                {% if file.third_party_url %}
+                                                {% if file.third_party_url and not file.is_adapt %}
                                                 <li><a class="dropdown-item" href="{{ file.third_party_url }}" target="_blank">
                                                     <i class="fas fa-external-link-alt me-2"></i>View on {{ file.third_party_source|default:"Source" }}
                                                 </a></li>
@@ -1653,16 +1653,12 @@ async function deleteMap(id, name) {
     if (!confirm(`Are you sure you want to delete the map "${name}"?`)) return;
     
     try {
-        const response = await fetch('{% url "filemanager:delete_item" %}', {
-            method: 'POST',
+        const url = '{% url "filemanager:delete_map" "00000000-0000-0000-0000-000000000000" %}'.replace('00000000-0000-0000-0000-000000000000', id);
+        const response = await fetch(url, {
+            method: 'DELETE',
             headers: {
-                'Content-Type': 'application/json',
                 'X-CSRFToken': csrftoken
-            },
-            body: JSON.stringify({
-                type: 'map',
-                id: id
-            })
+            }
         });
         
         const data = await response.json();
