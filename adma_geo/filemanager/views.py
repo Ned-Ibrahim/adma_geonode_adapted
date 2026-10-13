@@ -14,7 +14,7 @@ from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
 from .forms import NewPasswordChangeForm
-from .tasks import process_gis_file_task
+from .tasks import process_gis_file_task, queue_gis_processing
 from . import adapt_records, adapt_share, adapt_storage, adapt_views, permissions
 
 def get_robust_user_statistics(user):
@@ -1152,6 +1152,7 @@ def file_detail(request, file_id):
         'adapt_folder_name': adapt_folder_name,
         'adapt_folder_url': adapt_folder_url,
         'adapt_gone': adapt_gone,
+        'gis_problem': gis_problem(file_obj),
     })
 
 def public_file_detail(request, file_id):
@@ -1679,6 +1680,13 @@ def map_viewer(request, file_id):
         messages.error(request, "This file is not a spatial/GIS file.")
         return redirect('filemanager:file_detail', file_id=file_id)
     
+    # An ADAPT file is processed when someone asks for its map, not when it is
+    # opened: publishing every file opened on the share would upload large
+    # rasters nobody looks at. The page shows it being prepared meanwhile.
+    if (file_obj.gis_status == 'pending' and adapt_records.path_of(file_obj) is not None
+            and not adapt_records.is_gone(file_obj)):
+        queue_gis_processing(file_obj)
+    
     # Get GeoServer layer info
     geoserver_info = None
     if file_obj.geoserver_layer_name and file_obj.gis_status in ['published', 'processed']:
@@ -1732,7 +1740,18 @@ def map_viewer(request, file_id):
     return render(request, 'filemanager/map_viewer.html', {
         'file': file_obj,
         'geoserver_info': geoserver_info,
+        'gis_problem': gis_problem(file_obj),
     })
+
+
+def gis_problem(file_obj):
+    """Why a spatial file in 'error' has no map: the last failure its processing log records. None otherwise."""
+    if file_obj.gis_status != 'error':
+        return None
+    for line in reversed((file_obj.processing_log or '').splitlines()):
+        if line.startswith('✗'):
+            return line.lstrip('✗ ').split(': ', 1)[-1]
+    return 'ADMA could not prepare this file for the map.'
 
 def public_map_viewer(request, file_id):
     """Public view of GIS file on a map"""

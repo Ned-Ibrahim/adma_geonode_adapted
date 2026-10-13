@@ -321,6 +321,12 @@
                                     {% endif %}
                                 </td>
                             </tr>
+                            {% if gis_problem %}
+                            <tr>
+                                <th>Not on the map:</th>
+                                <td>{{ gis_problem }}</td>
+                            </tr>
+                            {% endif %}
                             {% if file.crs %}
                             <tr>
                                 <th>Coordinate System:</th>
@@ -377,7 +383,7 @@
                                 <i class="fas fa-download me-2"></i>Download File
                             </a>
                             {% endif %}
-                            {% if file.is_spatial %}
+                            {% if file.is_spatial and file.gis_status != 'error' and not adapt_gone %}
                             <a href="{% url 'filemanager:map_viewer' file.id %}" class="btn btn-success">
                                 <i class="fas fa-map-marked-alt me-2"></i>View on Map
                             </a>
