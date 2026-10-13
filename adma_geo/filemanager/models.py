@@ -777,7 +777,7 @@ class MapLayer(models.Model):
     # Layer properties
     layer_order = models.IntegerField(
         default=0, 
-        help_text="Display order in the map (lower numbers appear on top)"
+        help_text="Display order in the map (higher numbers draw on top)"
     )
     opacity = models.FloatField(
         default=1.0, 
