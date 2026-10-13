@@ -27,7 +27,7 @@ from pyproj.enums import WktVersion
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
-from filemanager import adapt_records, gis_read
+from filemanager import adapt_records, adapt_storage, gis_read
 from filemanager.geoserver_layer_group_manager import LayerGroupManager, lonlat_box
 from filemanager.geoserver_manager import SystematicGeoServerManager
 from filemanager.gis_utils import process_gis_file, shapefile_parts
@@ -209,6 +209,19 @@ class MapPageTests(GisCase):
         self.assertContains(first, 'Preparing the map')
         record.refresh_from_db()
         self.assertEqual(record.gis_status, 'processing')
+
+    @override_settings(ADAPT_WRITE_ENABLED=True)
+    def test_adapt_upload_is_queued_once_even_when_its_map_is_opened_at_once(self):
+        os.makedirs(os.path.join(self.mount, 'Soils'))
+        with open(self.fixture('dem_utm.tif'), 'rb') as src:
+            content = SimpleUploadedFile('dem.tif', src.read())
+        with mock.patch('filemanager.tasks.process_gis_file_task.delay') as delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                record = adapt_storage.upload_file('Soils', content, self.user).record
+            with self.captureOnCommitCallbacks(execute=True):
+                page = self.client.get(reverse('filemanager:map_viewer', args=[record.id]))
+        delay.assert_called_once_with(str(record.id))
+        self.assertContains(page, 'Preparing the map')
 
     def test_opening_an_adapt_file_does_not_process_it(self):
         self.put_on_share('Soils/dem.tif', 'dem_utm.tif')

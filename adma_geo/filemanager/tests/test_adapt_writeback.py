@@ -111,12 +111,15 @@ class WriteBackCase(TestCase):
             is_third_party=True, third_party_source='adapt', third_party_id=rel,
         )
 
+    # The upload helpers run on_commit callbacks, where GIS processing is queued.
+
     def upload(self, user, path, name='field.csv', content=b'x,y\n3,4\n', **target):
         self.client.force_login(user)
         target = target or {'adapt_path': path}
-        return self.client.post(reverse('filemanager:upload_files'), {
-            'files': [SimpleUploadedFile(name, content)], **target,
-        })
+        with self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(reverse('filemanager:upload_files'), {
+                'files': [SimpleUploadedFile(name, content)], **target,
+            })
 
     def create_folder(self, user, path, name, **target):
         self.client.force_login(user)
@@ -130,16 +133,18 @@ class WriteBackCase(TestCase):
     def upload_tree(self, user, path, paths, contents=None):
         self.client.force_login(user)
         contents = contents or [b'data'] * len(paths)
-        return self.client.post(reverse('filemanager:upload_folders'), {
-            'files': [SimpleUploadedFile(p.rsplit('/', 1)[-1], c) for p, c in zip(paths, contents)],
-            'file_paths': paths,
-            'adapt_path': path,
-        })
+        with self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(reverse('filemanager:upload_folders'), {
+                'files': [SimpleUploadedFile(p.rsplit('/', 1)[-1], c) for p, c in zip(paths, contents)],
+                'file_paths': paths,
+                'adapt_path': path,
+            })
 
     def api(self, user, url, data):
         token, _ = Token.objects.get_or_create(user=user)
         self.client.logout()
-        return self.client.post(url, data, HTTP_AUTHORIZATION=f'Token {token.key}')
+        with self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(url, data, HTTP_AUTHORIZATION=f'Token {token.key}')
 
     def api_upload(self, user, path, name='field.csv', content=b'x,y\n3,4\n', **target):
         target = target or {'adapt_path': path}

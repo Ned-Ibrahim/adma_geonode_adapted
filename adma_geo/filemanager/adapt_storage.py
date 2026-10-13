@@ -322,8 +322,15 @@ def upload_file(rel_dir, uploaded_file, owner, preferred_name=None):
             # For example a path too long to record.
             raise AdaptWriteError(str(exc)) from exc
         raise
-    from .tasks import process_gis_file_task
-    process_gis_file_task.delay(str(record.id))
+    from .models import File
+    from .tasks import queue_gis_processing
+
+    if record.gis_status != 'pending':
+        # A record reused for new bytes (its old file left the share) reads them again.
+        File.objects.filter(pk=record.pk).update(gis_status='pending')
+        record.gis_status = 'pending'
+    # Claimed here, so opening its map while it waits does not queue it again.
+    queue_gis_processing(record)
     return Upload(rel, name, size, record)
 
 
