@@ -16,6 +16,7 @@ from unittest import mock
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.core.exceptions import PermissionDenied
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -587,28 +588,34 @@ class ApiUpload(WriteBackCase):
 
 
 class DeleteAndRename(WriteBackCase):
-    """A GIS upload's record is ADMA's; removing it leaves the file on the share."""
+    """A GIS upload's record stays: nobody deletes it from ADMA or renames it, and the file stays on the share."""
 
     def delete(self, user, row):
         self.client.force_login(user)
         with mock.patch('filemanager.tasks.delete_file_async_task.delay') as task:
             task.return_value.id = 'task'
-            return self.client.post(
+            response = self.client.post(
                 reverse('filemanager:delete_item'),
                 data=json.dumps({'type': 'file', 'id': str(row.id)}),
                 content_type='application/json',
             )
+        self.assertFalse(task.called, 'no deletion is queued for an ADAPT record')
+        return response
 
-    def test_a_writer_removes_the_record_but_never_the_file_on_the_share(self):
+    def test_a_writer_cannot_remove_the_record_of_their_own_upload(self):
         self.upload(self.writer, 'Soils', 'plots.geojson', GEOJSON)
         row = File.objects.get()
+        self.assertEqual(row.owner, self.writer)
 
         response = self.delete(self.writer, row)
-        self.assertEqual(response.status_code, 200, response.content)
-        # The async task does the row removal; run what it runs.
-        delete_file_complete(File.objects.get(pk=row.pk))
+        self.assertEqual(response.status_code, 403, response.content)
+        self.assertIn('cannot be deleted from ADMA', response.json()['error'])
+        # Nor does what the async task runs.
+        with self.assertRaises(PermissionDenied):
+            delete_file_complete(File.objects.get(pk=row.pk))
 
-        self.assertFalse(File.objects.filter(pk=row.pk).exists())
+        row.refresh_from_db()
+        self.assertFalse(row.deletion_in_progress)
         self.assertTrue(os.path.exists(self.on_share('Soils/plots.geojson')))
 
     def test_a_read_grantee_cannot_delete_adapt_records_even_their_own(self):

@@ -109,21 +109,22 @@ class FilePageButtons(RecordsCase):
         self.client.force_login(user)
         return self.client.get(reverse('filemanager:file_detail', args=[record.id]))
 
-    def test_an_adapt_record_is_never_shared_or_renamed_from_its_page(self):
+    def test_an_adapt_record_is_never_shared_renamed_or_deleted_from_its_page(self):
         record = adapt_records.record_for('Soils/cores.csv')
         response = self.page(self.sync_user, record)
         self.assertNotContains(response, 'id="toggle-visibility-btn"')
         self.assertNotContains(response, 'Change Name')
-        self.assertContains(response, 'Delete File')
+        self.assertFalse(response.context['can_delete'])
+        self.assertNotContains(response, 'Delete File')
 
-    def test_delete_follows_write_access_not_ownership(self):
+    def test_owning_an_adapt_record_offers_no_delete(self):
         record = adapt_records.record_for('Soils/cores.csv', owner=self.reader)
         response = self.page(self.reader, record)
         self.assertFalse(response.context['can_delete'])
         self.assertNotContains(response, 'Delete File')
         self.assertNotContains(response, 'id="toggle-visibility-btn"')
 
-    def test_only_the_owner_sees_delete(self):
+    def test_a_superuser_sees_no_delete_on_someone_elses_adapt_record(self):
         record = adapt_records.record_for('Soils/cores.csv', owner=self.reader)
         self.assertNotContains(self.page(self.sync_user, record), 'Delete File')
 

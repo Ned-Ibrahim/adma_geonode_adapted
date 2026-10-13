@@ -10,7 +10,7 @@ from django.http import JsonResponse, HttpResponse, HttpResponseNotFound, Http40
 from django.db.models import Q, Count, Sum
 from django.urls import reverse_lazy
 from django.contrib.staticfiles import finders
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
 from .forms import NewPasswordChangeForm
@@ -486,6 +486,10 @@ def dashboard(request):
     ).filter(
         Q(owner=user) | Q(is_public=True)  # User's own OR public
     ).distinct().order_by('third_party_source', '-created_at')
+    # Delete is offered only where delete_item would allow it: others' public rows and ADAPT rows get none.
+    deletable_ids = {
+        item.id for item in chain(third_party_folders, third_party_files) if permissions.can_delete(user, item)
+    }
     
     return render(request, 'filemanager/dashboard.html', {
         'folders': folders,
@@ -500,6 +504,7 @@ def dashboard(request):
         # Third-party data panel
         'third_party_folders': third_party_folders,
         'third_party_files': third_party_files,
+        'deletable_ids': deletable_ids,
         'adapt_entry': adapt_entry,
         'total_third_party_folders': third_party_folders.count() + (1 if adapt_entry else 0),
         'total_third_party_files': third_party_files.count(),
@@ -1138,10 +1143,9 @@ def file_detail(request, file_id):
         'file_content': file_content,
         'csv_data': json.dumps(csv_data) if csv_data else None,
         'csv_headers': json.dumps(csv_headers) if csv_headers else None,
-        # A record on the ADAPT share is never shared or renamed from ADMA, and
-        # is deleted only by an owner who may write there (see delete_item).
+        # A record on the ADAPT share is never shared, renamed or deleted from ADMA.
         'can_edit': file_obj.owner == request.user and not is_adapt_record,
-        'can_delete': file_obj.owner == request.user and _adapt_delete_refusal(request.user, file_obj) is None,
+        'can_delete': permissions.can_delete(request.user, file_obj),
         'is_realm5_observation': is_realm5_observation,
         'realm5_observation_data': json.dumps(realm5_observation_data) if realm5_observation_data else None,
         'realm5_variables': json.dumps(realm5_variables) if realm5_variables else None,
@@ -1468,7 +1472,11 @@ def delete_file_complete(file_obj):
     3. Remove ChromaDB embeddings
     4. Remove physical file from disk
     5. Remove from PostgreSQL database
+
+    Raises PermissionDenied for an ADAPT record, which nobody deletes from ADMA.
     """
+    if permissions.touches_adapt([file_obj]):
+        raise PermissionDenied(f'{file_obj.name}: {permissions.ADAPT_DELETE_MESSAGE}')
     try:
         # 1. Remove from GeoServer if it's a spatial file
         if file_obj.is_spatial and file_obj.geoserver_layer_name:
@@ -1541,7 +1549,17 @@ def delete_folder_complete(folder_obj):
     2. Recursively delete all subfolders
     3. Remove ChromaDB embeddings for the folder
     4. Remove from PostgreSQL database
+
+    Raises PermissionDenied, before deleting anything, for an ADAPT folder and
+    for a folder with ADAPT rows anywhere beneath it.
     """
+    if permissions.touches_adapt([folder_obj]):
+        raise PermissionDenied(f'{folder_obj.name}: {permissions.ADAPT_DELETE_MESSAGE}')
+    _delete_folder_tree(folder_obj)
+
+
+def _delete_folder_tree(folder_obj):
+    """delete_folder_complete without the ADAPT check, which it makes once for the whole tree."""
     try:
         print(f"Starting complete deletion of folder: {folder_obj.name}")
         
@@ -1553,7 +1571,7 @@ def delete_folder_complete(folder_obj):
         # 2. Recursively delete all subfolders
         for subfolder in folder_obj.subfolders.all():
             print(f"Deleting subfolder {subfolder.name} in folder {folder_obj.name}")
-            delete_folder_complete(subfolder)
+            _delete_folder_tree(subfolder)
         
         # 3. ChromaDB embeddings removal - DISABLED (no longer using ChromaDB)
         # NOTE: ChromaDB and embedding service removed in favor of PostgreSQL search
@@ -1568,16 +1586,29 @@ def delete_folder_complete(folder_obj):
         raise
 
 
-def _adapt_delete_refusal(user, item):
-    """A 403 response if `item` is an ADAPT row the user may not remove, else None.
+def _delete_refusal(user, item):
+    """A response refusing to delete `item` for `user`, or None if they may.
 
-    Deleting an ADAPT row never deletes on the share: only the row goes, and the
-    next sync lists the file again. Even so it takes write access, so a user
-    whose grant is read-only cannot remove rows, not even their own uploads.
+    Only the owner deletes, and nobody deletes ADAPT content (see
+    permissions.can_delete), whatever their grant: a writer, the row's owner and
+    a superuser are all refused, and the row is left as it was. Anyone who may
+    not see the item gets the same 404 as for one that does not exist.
     """
-    if item.is_third_party and item.third_party_source == 'adapt' and not permissions.can_write(user, item):
-        return JsonResponse({'error': READ_ONLY_MESSAGE}, status=403)
+    if not permissions.can_read(user, item):
+        return JsonResponse({'error': 'Not found'}, status=404)
+    if permissions.touches_adapt([item]):
+        return JsonResponse({'error': permissions.ADAPT_DELETE_MESSAGE}, status=403)
+    if item.owner_id != user.id:
+        return JsonResponse({'error': 'Not found'}, status=404)
     return None
+
+
+def _find(model, item_id):
+    """The `model` row with this id, or None for a missing or malformed id: both are a 404 to the client."""
+    try:
+        return model.objects.filter(id=item_id).first()
+    except (ValueError, ValidationError):
+        return None
 
 
 @login_required
@@ -1590,9 +1621,11 @@ def delete_item(request):
             item_id = data.get('id')
             
             if item_type == 'file':
-                item = get_object_or_404(File, id=item_id, owner=request.user)
+                item = _find(File, item_id)
+                if item is None:
+                    return JsonResponse({'error': 'Not found'}, status=404)
                 item_name = item.name
-                refused = _adapt_delete_refusal(request.user, item)
+                refused = _delete_refusal(request.user, item)
                 if refused:
                     return refused
                 
@@ -1613,9 +1646,11 @@ def delete_item(request):
                 })
                 
             elif item_type == 'folder':
-                item = get_object_or_404(Folder, id=item_id, owner=request.user)
+                item = _find(Folder, item_id)
+                if item is None:
+                    return JsonResponse({'error': 'Not found'}, status=404)
                 item_name = item.name
-                refused = _adapt_delete_refusal(request.user, item)
+                refused = _delete_refusal(request.user, item)
                 if refused:
                     return refused
                 

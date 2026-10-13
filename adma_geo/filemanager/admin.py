@@ -1,15 +1,44 @@
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.contrib.admin.actions import delete_selected as django_delete_selected
+from django.contrib.admin.utils import unquote
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
-from . import adapt_share
+from django.shortcuts import redirect
+from django.urls import reverse
+from . import adapt_share, permissions
 from .models import Folder, File, Map, MapLayer, Tool, FolderGrant, RosterGroup, UserProfile
 
 User = get_user_model()
 
 
+class KeepAdaptRows:
+    """Nothing on the ADAPT share is deleted here either: no ADAPT row, and no folder with one beneath it.
+
+    The change page offers no Delete for these rows, and a bulk delete whose
+    selection includes any of them deletes nothing and says why.
+    """
+    actions = ['delete_selected']
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and permissions.touches_adapt([obj]):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    @admin.action(permissions=['delete'], description=django_delete_selected.short_description)
+    def delete_selected(self, request, queryset):
+        if permissions.touches_adapt(queryset):
+            self.message_user(
+                request,
+                f'Nothing was deleted: the selection includes ADAPT content. {permissions.ADAPT_DELETE_MESSAGE}',
+                messages.ERROR,
+            )
+            return None
+        return django_delete_selected(self, request, queryset)
+
+
 @admin.register(Folder)
-class FolderAdmin(admin.ModelAdmin):
+class FolderAdmin(KeepAdaptRows, admin.ModelAdmin):
     list_display = ['name', 'owner', 'parent', 'is_public', 'created_at']
     list_filter = ['is_public', 'created_at']
     search_fields = ['name']
@@ -17,7 +46,7 @@ class FolderAdmin(admin.ModelAdmin):
 
 
 @admin.register(File)
-class FileAdmin(admin.ModelAdmin):
+class FileAdmin(KeepAdaptRows, admin.ModelAdmin):
     list_display = ['name', 'owner', 'folder', 'file_type', 'file_size', 'is_public', 'created_at']
     list_filter = ['file_type', 'is_public', 'created_at']
     search_fields = ['name']
@@ -126,8 +155,14 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class ProfileUserAdmin(UserAdmin):
-    """Django's user admin, plus the profile (NUID) on the change page and in search."""
+    """Django's user admin, plus the profile (NUID) on the change page and in search.
+
+    A user's Files and Folders are deleted with them, so a user who owns ADAPT
+    rows (see permissions.owns_adapt) is not deleted, alone or in a bulk delete,
+    until those rows are reassigned.
+    """
     inlines = [UserProfileInline]
+    actions = ['delete_selected']
     list_display = UserAdmin.list_display + ('nuid',)
     list_select_related = ['profile']
     search_fields = UserAdmin.search_fields + ('profile__nuid',)
@@ -136,3 +171,28 @@ class ProfileUserAdmin(UserAdmin):
     def nuid(self, obj):
         profile = getattr(obj, 'profile', None)
         return profile.nuid if profile else None
+
+    def delete_view(self, request, object_id, extra_context=None):
+        user = self.get_object(request, unquote(object_id))
+        if user is not None and self.has_delete_permission(request, user) and permissions.owns_adapt([user]):
+            self.message_user(
+                request, f'{user} was not deleted: they own ADAPT content. {permissions.ADAPT_OWNER_MESSAGE}',
+                messages.ERROR,
+            )
+            opts = self.opts
+            return redirect(reverse(
+                f'admin:{opts.app_label}_{opts.model_name}_change', args=[user.pk], current_app=self.admin_site.name,
+            ))
+        return super().delete_view(request, object_id, extra_context)
+
+    @admin.action(permissions=['delete'], description=django_delete_selected.short_description)
+    def delete_selected(self, request, queryset):
+        if permissions.owns_adapt(queryset):
+            self.message_user(
+                request,
+                'Nothing was deleted: the selection includes a user who owns ADAPT content. '
+                f'{permissions.ADAPT_OWNER_MESSAGE}',
+                messages.ERROR,
+            )
+            return None
+        return django_delete_selected(self, request, queryset)
