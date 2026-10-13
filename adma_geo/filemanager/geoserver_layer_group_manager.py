@@ -35,6 +35,34 @@ def _checked_lonlat(west, south, east, north):
     return None
 
 
+def _names(entries, bare=False):
+    """
+    The names in a Layer Group's published layers or styles, None for a
+    layer's default style; bare drops the workspace prefix.
+
+    GeoServer's JSON gives a list of one as the entry itself, and a default
+    style as "" where ADMA sends null.
+    """
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        entries = [entries]
+    names = []
+    for entry in entries:
+        name = entry.get('name') if isinstance(entry, dict) else entry
+        names.append((name.rsplit(':', 1)[-1] if bare else name) if name else None)
+    return names
+
+
+def _same_bounds(bounds, wanted):
+    """True if GeoServer's Layer Group bounds are the wanted ones, in the same CRS."""
+    try:
+        return bounds['crs'] == wanted['crs'] and all(
+            abs(float(bounds[key]) - wanted[key]) < 1e-9 for key in ('minx', 'miny', 'maxx', 'maxy'))
+    except (TypeError, KeyError, ValueError):
+        return False
+
+
 class LayerGroupManager:
     """
     Manages GeoServer Layer Groups for composite maps.
@@ -101,6 +129,50 @@ class LayerGroupManager:
             error_msg = f"Error updating Layer Group: {str(e)}"
             logger.error(error_msg)
             return False, error_msg
+
+    def layer_group_change(self, map_obj):
+        """
+        What update_layer_group would change in GeoServer for this map, or
+        None if its Layer Group already matches the map.
+
+        Reads GeoServer only. The answer is 'missing', 'no visible layers'
+        (a group to delete), or the parts that differ: 'layers', 'styles',
+        'bounds' (the group keeps old bounds, the whole world say).
+
+        Args:
+            map_obj: Map model instance
+
+        Returns:
+            str or None
+        """
+        group = self._get_layer_group(map_obj.geoserver_layer_group_name)
+        map_layers = self._visible_layers(map_obj)
+        if not map_layers.exists():
+            return 'no visible layers' if group is not None else None
+        if group is None:
+            return 'missing'
+
+        wanted = self._build_layer_group_data(map_obj, map_layers)['layerGroup']
+        differ = []
+        if _names(group['publishables']['published']) != _names(wanted['publishables']['published']):
+            differ.append('layers')
+        if _names(group.get('styles', {}).get('style'), bare=True) != _names(wanted['styles']['style'], bare=True):
+            differ.append('styles')
+        if 'bounds' in wanted and not _same_bounds(group.get('bounds'), wanted['bounds']):
+            differ.append('bounds')
+        return ', '.join(f'{part} differ' for part in differ) or None
+
+    def _get_layer_group(self, layer_group_name):
+        """GeoServer's definition of the Layer Group as a dict, or None if it has none."""
+        response = requests.get(
+            f"{self.geoserver_url}/rest/workspaces/{self.workspace}/layergroups/{layer_group_name}.json",
+            params={'quietOnNotFound': 'true'}, auth=self.auth, headers=self.headers, timeout=30,
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise requests.RequestException(f"GeoServer answered {response.status_code} for Layer Group {layer_group_name}")
+        return response.json()['layerGroup']
 
     def _visible_layers(self, map_obj):
         """The map's visible, published layers, in drawing order."""

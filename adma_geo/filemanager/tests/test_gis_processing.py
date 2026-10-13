@@ -378,7 +378,10 @@ class FakeLayerGroups:
 
     def get(self, url, **kwargs):
         if '/layergroups/' in url:
-            return self.answer('GET', url, 200 if self.name(url) in self.groups else 404)
+            group = self.groups.get(self.name(url))
+            if group is None:
+                return self.answer('GET', url, 404)
+            return self.answer('GET', url, 200, {'layerGroup': self.rendered(group)})
         if '/resources/' in url:
             bbox = dict(zip(('minx', 'miny', 'maxx', 'maxy'), self.layer_extents[url.rsplit('/', 1)[-1]]))
             return self.answer('GET', url, 200, {'coverage': {'latLonBoundingBox': bbox}})
@@ -411,7 +414,20 @@ class FakeLayerGroups:
         return self.answer(method, url, status, json=json)
 
     def name(self, url):
-        return url.rsplit('/', 1)[-1]
+        return url.rsplit('/', 1)[-1].removesuffix('.json')
+
+    def rendered(self, group):
+        """The group as GeoServer's JSON gives it back: a list of one is the entry
+        itself, a layer's default style is "" and a named one carries an href."""
+        def one_or_list(entries):
+            return entries[0] if len(entries) == 1 else entries
+        published = [dict(entry, href=f'http://gs/rest/layers/{entry["name"]}.json')
+                     for entry in group['publishables']['published']]
+        styles = [dict(style, href='http://gs/rest/styles/x.json') if style else ''
+                  for style in group['styles']['style']]
+        rendered = dict(group, mode='SINGLE', publishables={'published': one_or_list(published)},
+                        styles={'style': one_or_list(styles)})
+        return rendered
 
     def answer(self, method, url, status, body=None, json=None):
         self.calls.append((method, url, status, json))
@@ -517,6 +533,56 @@ class LayerGroupTests(GisCase):
         orders = dict(map_obj.map_layers.values_list('file__name', 'layer_order'))
         self.assertEqual(orders, {'dem_utm.tif': 0, 'field.geojson': 1})
         self.assertEqual(self.group_layers(map_obj), ['adma_geo:dem_utm', 'adma_geo:field_wgs84'])
+
+    def make_map(self, name, *files):
+        map_obj = Map.objects.create(name=name, owner=self.user)
+        for order, upload in enumerate(files):
+            MapLayer.objects.create(map=map_obj, file=upload, layer_order=order)
+        return map_obj
+
+    def fix_gis_layers(self, *args):
+        out = io.StringIO()
+        with mock.patch.object(SystematicGeoServerManager, 'layer_problem', return_value=None):
+            call_command('fix_gis_layers', *args, stdout=out)
+        return out.getvalue()
+
+    def test_fix_gis_layers_brings_old_and_lost_groups_in_step_once(self):
+        world = self.make_map('world', self.state_plane, self.utm_raster)
+        self.group(world)['bounds'] = {'minx': -180, 'miny': -90, 'maxx': 180, 'maxy': 90, 'crs': 'EPSG:4326'}
+        lost = self.make_map('lost', self.geojson)
+        del self.fake.groups[lost.geoserver_layer_group_name]
+        current = self.make_map('current', self.utm_raster)
+        hidden = self.make_map('hidden', self.geojson)
+        MapLayer.objects.filter(map=hidden).update(is_visible=False)
+        self.fake.calls.clear()
+
+        out = self.fix_gis_layers()
+        self.assertIn(f'Map {world.id} world: would refresh (bounds differ)', out)
+        self.assertIn(f'Map {lost.id} lost: would refresh (missing)', out)
+        self.assertIn(f'Map {current.id} current: ok', out)
+        self.assertIn(f'Map {hidden.id} hidden: would refresh (no visible layers)', out)
+        self.assertIn('Dry run: 3 ok; maps: 1 ok, 3 would refresh', out)
+        self.assertEqual(self.fake.writes(), [])
+
+        out = self.fix_gis_layers('--apply')
+        self.assertIn(f'Map {world.id} world: refreshed (bounds differ: Layer Group updated', out)
+        self.assertIn(f'Map {lost.id} lost: refreshed (missing: Layer Group created', out)
+        self.assertIn(f'Map {hidden.id} hidden: refreshed (no visible layers: Layer Group deleted', out)
+        self.assertEqual(self.fake.failures(), [])
+        bounds = self.group(world)['bounds']
+        self.assertNearField([bounds['minx'], bounds['miny'], bounds['maxx'], bounds['maxy']])
+        self.assertEqual(self.group_layers(lost), ['adma_geo:field_wgs84'])
+        self.assertNotIn(hidden.geoserver_layer_group_name, self.fake.groups)
+
+        self.fake.calls.clear()
+        self.assertIn('3 ok; maps: 4 ok', self.fix_gis_layers('--apply'))
+        self.assertEqual(self.fake.writes(), [])
+
+    def test_fix_gis_layers_sees_layers_and_styles_that_differ(self):
+        map_obj = self.make_map('styled', self.state_plane, self.utm_raster)
+        self.group(map_obj)['publishables']['published'].reverse()
+        MapLayer.objects.filter(map=map_obj, file=self.utm_raster).update(style_name='dem_hillshade')
+        self.assertIn(f'Map {map_obj.id} styled: would refresh (layers differ, styles differ)', self.fix_gis_layers())
 
     def test_a_named_style_is_sent_and_other_layers_keep_their_default(self):
         map_obj = self.create_map(self.state_plane, self.utm_raster)

@@ -16,8 +16,15 @@ command finds both:
   file processed but never published, is published again.
 
 Files still 'pending' or 'processing' are left alone: ADAPT files are processed
-when someone opens their map. It prints one line per spatial file. Running it
-again changes nothing more, except that a file still in error is tried again.
+when someone opens their map.
+
+Then every custom Map's layer group is brought in step with its visible layers,
+through the same update_layer_group the map pages use: a group made before
+ADMA read extents keeps the whole world as its bounds, and a map whose group
+GeoServer lost gets it again.
+
+It prints one line per spatial file and one per Map. Running it again changes
+nothing more, except that a file still in error is tried again.
 
 Usage:
     python manage.py fix_gis_layers            # dry run: report only
@@ -28,9 +35,10 @@ import json
 from django.core.management.base import BaseCommand
 
 from filemanager import adapt_records, gis_read
+from filemanager.geoserver_layer_group_manager import LayerGroupManager
 from filemanager.geoserver_manager import SystematicGeoServerManager, epsg_of
 from filemanager.gis_utils import process_gis_file
-from filemanager.models import File
+from filemanager.models import File, Map
 
 
 def read_from_file(file_obj):
@@ -43,7 +51,8 @@ def read_from_file(file_obj):
 
 class Command(BaseCommand):
     help = ('Process spatial files again where ADMA guessed their coordinate system or extent, or failed, '
-            'and repair GeoServer layers with srs null or disabled. Dry run unless --apply.')
+            'repair GeoServer layers with srs null or disabled, and bring custom maps\' layer groups '
+            'in step with their layers. Dry run unless --apply.')
 
     def add_arguments(self, parser):
         parser.add_argument('--apply', action='store_true', help='Make the changes (default: report only)')
@@ -61,6 +70,19 @@ class Command(BaseCommand):
             counts[outcome] = counts.get(outcome, 0) + 1
             self.stdout.write(f'{file_obj.id} {file_obj.name}: {outcome}' + (f' ({detail})' if detail else ''))
         summary = ', '.join(f'{count} {outcome}' for outcome, count in sorted(counts.items())) or 'no spatial files'
+
+        # After the files, so a group takes the extents and layers just repaired
+        self.groups = LayerGroupManager()
+        map_counts = {}
+        for map_obj in Map.objects.filter(deletion_in_progress=False).order_by('created_at', 'pk'):
+            try:
+                outcome, detail = self.fix_map(map_obj)
+            except Exception as exc:
+                outcome, detail = 'failed', str(exc)
+            map_counts[outcome] = map_counts.get(outcome, 0) + 1
+            self.stdout.write(f'Map {map_obj.id} {map_obj.name}: {outcome}' + (f' ({detail})' if detail else ''))
+        summary += '; maps: ' + (', '.join(f'{count} {outcome}' for outcome, count in sorted(map_counts.items()))
+                                 or 'none')
         self.stdout.write(('' if self.apply else 'Dry run: ') + summary)
 
     def fix(self, file_obj):
@@ -84,6 +106,16 @@ class Command(BaseCommand):
         if not self.apply:
             return 'would repair', problem
         return self.repair(file_obj, problem)
+
+    def fix_map(self, map_obj):
+        """(outcome, detail) for one Map's layer group, after refreshing it when --apply."""
+        change = self.groups.layer_group_change(map_obj)
+        if change is None:
+            return 'ok', None
+        if not self.apply:
+            return 'would refresh', change
+        success, message = self.groups.update_layer_group(map_obj)
+        return ('refreshed' if success else 'error'), f'{change}: {message}'
 
     def layer_problem(self, file_obj):
         if file_obj.gis_status != 'published' or not file_obj.geoserver_layer_name:
