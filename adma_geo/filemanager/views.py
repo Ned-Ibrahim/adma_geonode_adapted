@@ -1522,7 +1522,7 @@ def delete_file_complete(file_obj):
         # 6. Update affected maps' Layer Groups in GeoServer
         for map_obj in affected_maps:
             try:
-                from .geoserver_manager import LayerGroupManager
+                from .geoserver_layer_group_manager import LayerGroupManager
                 layer_group_manager = LayerGroupManager()
                 layer_group_manager.update_layer_group(map_obj)
                 print(f"Updated Layer Group for map {map_obj.name}")

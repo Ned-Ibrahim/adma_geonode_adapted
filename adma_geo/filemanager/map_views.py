@@ -245,6 +245,12 @@ def create_map_view(request):
             return redirect('filemanager:create_map')
 
 
+def _next_layer_order(map_obj):
+    """The layer_order that puts a new layer above the map's current top layer."""
+    max_order = map_obj.map_layers.aggregate(max_order=models.Max('layer_order'))['max_order']
+    return 0 if max_order is None else max_order + 1
+
+
 @login_required
 @require_http_methods(["POST"])
 def add_layer_to_map(request, map_id):
@@ -254,7 +260,9 @@ def add_layer_to_map(request, map_id):
         
         data = json.loads(request.body)
         file_id = data.get('file_id')
-        layer_order = data.get('layer_order', map_obj.layer_count)
+        layer_order = data.get('layer_order')
+        if layer_order is None:
+            layer_order = _next_layer_order(map_obj)
         
         file_obj = get_object_or_404(File, id=file_id)
         
@@ -300,6 +308,9 @@ def remove_layer_from_map(request, map_id, layer_id):
         # Update GeoServer Layer Group
         layer_group_manager = LayerGroupManager()
         success, message = layer_group_manager.update_layer_group(map_obj)
+        
+        # The map opens on the extent of the layers it still has
+        map_obj.calculate_and_update_center()
         
         if success:
             return JsonResponse({'success': True, 'message': 'Layer removed successfully'})
@@ -461,13 +472,8 @@ def add_layers_to_map(request, map_id):
         if not selected_file_ids:
             return JsonResponse({'success': False, 'error': 'No files selected'})
         
-        # Get the current highest layer order
-        max_order = map_obj.map_layers.aggregate(
-            max_order=models.Max('layer_order')
-        )['max_order'] or -1
-        
         added_layers = []
-        layer_order = max_order + 1
+        layer_order = _next_layer_order(map_obj)
         
         with transaction.atomic():
             for file_id in selected_file_ids:

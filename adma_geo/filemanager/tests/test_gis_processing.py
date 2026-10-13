@@ -28,9 +28,10 @@ from rasterio.transform import from_origin
 from shapely.geometry import box
 
 from filemanager import adapt_records, gis_read
+from filemanager.geoserver_layer_group_manager import LayerGroupManager, lonlat_box
 from filemanager.geoserver_manager import SystematicGeoServerManager
 from filemanager.gis_utils import process_gis_file, shapefile_parts
-from filemanager.models import File, Folder
+from filemanager.models import File, Folder, Map, MapLayer
 
 User = get_user_model()
 
@@ -346,3 +347,188 @@ class RepairCommandTests(GisCase):
         self.put_on_share('Soils/dem.tif', 'dem_utm.tif')
         record = adapt_records.record_for('Soils/dem.tif')
         self.assertIn(f'{record.id} dem.tif: left alone (pending)', self.run_command('--apply'))
+
+
+class FakeLayerGroups:
+    """GeoServer REST for layer groups, as `requests` sees them, answering as 2.25.2 does.
+
+    A PUT or DELETE of a group GeoServer does not have is a 500 (a NullPointerException
+    for the PUT), and so is a group whose styles do not match its layers one for one.
+    """
+
+    RequestException = requests.RequestException
+
+    def __init__(self, layer_extents=None):
+        self.groups = {}
+        self.layer_extents = layer_extents or {}
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        if '/layergroups/' in url:
+            return self.answer('GET', url, 200 if self.name(url) in self.groups else 404)
+        if '/resources/' in url:
+            bbox = dict(zip(('minx', 'miny', 'maxx', 'maxy'), self.layer_extents[url.rsplit('/', 1)[-1]]))
+            return self.answer('GET', url, 200, {'coverage': {'latLonBoundingBox': bbox}})
+        layer = url.rsplit('/', 1)[-1][:-len('.json')]
+        if layer not in self.layer_extents:
+            return self.answer('GET', url, 404)
+        return self.answer('GET', url, 200, {'layer': {'resource': {'href': f'http://gs/rest/resources/{layer}'}}})
+
+    def post(self, url, json=None, **kwargs):
+        group = json['layerGroup']
+        if group['name'] in self.groups:
+            return self.answer('POST', url, 500, json=json)
+        return self.save('POST', url, json, 201)
+
+    def put(self, url, json=None, **kwargs):
+        if self.name(url) not in self.groups:
+            return self.answer('PUT', url, 500, json=json)
+        return self.save('PUT', url, json, 200)
+
+    def delete(self, url, **kwargs):
+        if self.groups.pop(self.name(url), None) is None:
+            return self.answer('DELETE', url, 500)
+        return self.answer('DELETE', url, 200)
+
+    def save(self, method, url, json, status):
+        group = json['layerGroup']
+        if len(group.get('styles', {}).get('style', [])) != len(group['publishables']['published']):
+            return self.answer(method, url, 500, json=json)
+        self.groups[group['name']] = group
+        return self.answer(method, url, status, json=json)
+
+    def name(self, url):
+        return url.rsplit('/', 1)[-1]
+
+    def answer(self, method, url, status, body=None, json=None):
+        self.calls.append((method, url, status, json))
+        response = mock.Mock(status_code=status, text='')
+        response.json.return_value = body or {}
+        return response
+
+    def failures(self):
+        return [call[:3] for call in self.calls if call[2] >= 500]
+
+    def writes(self):
+        return [call[:3] for call in self.calls if call[0] != 'GET']
+
+
+class LayerGroupTests(GisCase):
+    """A custom Map's GeoServer layer group, as the map pages change it."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake = FakeLayerGroups()
+        patch = mock.patch('filemanager.geoserver_layer_group_manager.requests', self.fake)
+        patch.start()
+        self.addCleanup(patch.stop)
+        centre = mock.patch.object(Map, 'calculate_and_update_center')
+        centre.start()
+        self.addCleanup(centre.stop)
+        self.state_plane = self.published(self.upload_shapefile(), 'field_sp')
+        self.utm_raster = self.published(self.upload('dem_utm.tif'), 'dem_utm')
+        self.geojson = self.published(self.upload('field.geojson'), 'field_wgs84')
+
+    def published(self, upload, layer):
+        self.assertTrue(process_gis_file(upload)[0])
+        upload.gis_status = 'published'
+        upload.geoserver_layer_name = layer
+        upload.save()
+        return upload
+
+    def create_map(self, *files):
+        response = self.client.post(reverse('filemanager:create_map'), {
+            'map_name': 'Mead field', 'selected_files': [str(f.id) for f in files]})
+        map_obj = Map.objects.get(name='Mead field')
+        self.assertRedirects(response, reverse('filemanager:map_detail', args=[map_obj.id]),
+                             fetch_redirect_response=False)
+        return map_obj
+
+    def post_json(self, name, map_obj, body, *args):
+        response = self.client.post(reverse(f'filemanager:{name}', args=[map_obj.id, *args]),
+                                    json.dumps(body), content_type='application/json')
+        self.assertTrue(response.json()['success'], response.json())
+
+    def group(self, map_obj):
+        return self.fake.groups[map_obj.geoserver_layer_group_name]
+
+    def group_layers(self, map_obj):
+        return [entry['name'] for entry in self.group(map_obj)['publishables']['published']]
+
+    def assertGroupMatchesMap(self, map_obj):
+        layers = map_obj.map_layers.order_by('layer_order').select_related('file')
+        self.assertEqual(self.group_layers(map_obj), [f'adma_geo:{ml.file.geoserver_layer_name}' for ml in layers])
+        self.assertEqual(self.group(map_obj)['styles'], {'style': [None] * len(layers)})
+
+    def test_creating_a_map_makes_its_group_with_the_layers_real_extent(self):
+        map_obj = self.create_map(self.state_plane, self.utm_raster, self.geojson)
+        self.assertEqual(self.fake.failures(), [])
+        self.assertEqual(self.group_layers(map_obj), [
+            'adma_geo:field_sp', 'adma_geo:dem_utm', 'adma_geo:field_wgs84'])
+        self.assertEqual(self.group(map_obj)['styles'], {'style': [None, None, None]})
+        bounds = self.group(map_obj)['bounds']
+        self.assertEqual(bounds['crs'], 'EPSG:4326')
+        self.assertNearField([bounds['minx'], bounds['miny'], bounds['maxx'], bounds['maxy']])
+
+    def test_adding_removing_and_reordering_keep_the_group_in_step(self):
+        map_obj = self.create_map(self.state_plane, self.utm_raster)
+        self.post_json('add_layers_to_map', map_obj, {'file_ids': [str(self.geojson.id)]})
+        self.assertGroupMatchesMap(map_obj)
+        self.assertEqual(len(self.group_layers(map_obj)), 3)
+
+        first = map_obj.map_layers.order_by('layer_order').first()
+        self.post_json('remove_layer_from_map', map_obj, {}, first.id)
+        self.assertGroupMatchesMap(map_obj)
+        self.assertEqual(self.group_layers(map_obj), ['adma_geo:dem_utm', 'adma_geo:field_wgs84'])
+
+        reversed_order = [{'layer_id': str(ml.id), 'order': 10 - n}
+                          for n, ml in enumerate(map_obj.map_layers.order_by('layer_order'))]
+        self.post_json('update_layer_order', map_obj, {'layer_orders': reversed_order})
+        self.assertEqual(self.group_layers(map_obj), ['adma_geo:field_wgs84', 'adma_geo:dem_utm'])
+        self.assertEqual(self.fake.failures(), [])
+
+    def test_removing_every_layer_drops_the_group_and_adding_one_makes_it_again(self):
+        map_obj = self.create_map(self.utm_raster)
+        layer = map_obj.map_layers.get()
+        self.post_json('remove_layer_from_map', map_obj, {}, layer.id)
+        self.assertNotIn(map_obj.geoserver_layer_group_name, self.fake.groups)
+
+        self.post_json('add_layers_to_map', map_obj, {'file_ids': [str(self.geojson.id), str(self.state_plane.id)]})
+        self.assertEqual(self.fake.failures(), [])
+        self.assertEqual(self.group_layers(map_obj), ['adma_geo:field_wgs84', 'adma_geo:field_sp'])
+        self.assertEqual(list(map_obj.map_layers.order_by('layer_order').values_list('layer_order', flat=True)), [0, 1])
+
+    def test_new_layers_go_above_a_top_layer_numbered_zero(self):
+        map_obj = self.create_map(self.utm_raster)
+        self.post_json('add_layers_to_map', map_obj, {'file_ids': [str(self.geojson.id)]})
+        orders = dict(map_obj.map_layers.values_list('file__name', 'layer_order'))
+        self.assertEqual(orders, {'dem_utm.tif': 0, 'field.geojson': 1})
+        self.assertEqual(self.group_layers(map_obj), ['adma_geo:dem_utm', 'adma_geo:field_wgs84'])
+
+    def test_a_named_style_is_sent_and_other_layers_keep_their_default(self):
+        map_obj = self.create_map(self.state_plane, self.utm_raster)
+        MapLayer.objects.filter(map=map_obj, file=self.utm_raster).update(style_name='dem_hillshade')
+        LayerGroupManager().update_layer_group(map_obj)
+        self.assertEqual(self.group(map_obj)['styles'], {'style': [None, {'name': 'dem_hillshade'}]})
+
+    def test_a_layer_with_no_stored_extent_takes_it_from_geoserver(self):
+        File.objects.filter(id=self.utm_raster.id).update(spatial_extent=None)
+        self.fake.layer_extents['dem_utm'] = (-96.6, 41.1, -96.55, 41.15)
+        map_obj = self.create_map(self.utm_raster, self.geojson)
+        bounds = self.group(map_obj)['bounds']
+        self.assertEqual((bounds['minx'], bounds['miny']), (-96.6, 41.1))
+        self.assertAlmostEqual(bounds['maxx'], FIELD[2], delta=0.002)
+        self.assertAlmostEqual(bounds['maxy'], FIELD[3], delta=0.002)
+
+    def test_a_map_with_no_known_extent_lets_geoserver_work_out_its_bounds(self):
+        File.objects.filter(id=self.utm_raster.id).update(spatial_extent=None)
+        map_obj = self.create_map(self.utm_raster)
+        self.assertNotIn('bounds', self.group(map_obj))
+
+    def test_stored_extents_count_only_in_longitude_and_latitude(self):
+        envelope = json.dumps({'type': 'envelope', 'coordinates': [[-96.495, 41.167], [-96.485, 41.173]]})
+        self.assertEqual(lonlat_box(envelope), (-96.495, 41.167, -96.485, 41.173))
+        state_plane = json.dumps({'type': 'envelope', 'coordinates': [[2604801.6, 504989.6], [2607641.3, 507645.2]]})
+        for extent in (state_plane, None, '', 'not json', '{"type": "envelope"}'):
+            self.assertIsNone(lonlat_box(extent), extent)
+
