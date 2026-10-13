@@ -534,6 +534,21 @@ class LayerGroupTests(GisCase):
         self.assertEqual(orders, {'dem_utm.tif': 0, 'field.geojson': 1})
         self.assertEqual(self.group_layers(map_obj), ['adma_geo:dem_utm', 'adma_geo:field_wgs84'])
 
+    def test_hiding_a_layer_leaves_it_out_of_the_group_as_the_page_does(self):
+        map_obj = self.create_map(self.state_plane, self.utm_raster, self.geojson)
+        middle = map_obj.map_layers.get(file=self.utm_raster)
+        self.post_json('update_layer_visibility', map_obj, {'visible': False}, middle.id)
+        self.assertEqual(self.group_layers(map_obj), ['adma_geo:field_sp', 'adma_geo:field_wgs84'])
+        self.assertEqual(self.group(map_obj)['styles'], {'style': [None, None]})
+
+        self.post_json('update_layer_visibility', map_obj, {'visible': True}, middle.id)
+        self.assertGroupMatchesMap(map_obj)
+
+        for layer in map_obj.map_layers.all():
+            self.post_json('update_layer_visibility', map_obj, {'visible': False}, layer.id)
+        self.assertNotIn(map_obj.geoserver_layer_group_name, self.fake.groups)
+        self.assertEqual(self.fake.failures(), [])
+
     def make_map(self, name, *files):
         map_obj = Map.objects.create(name=name, owner=self.user)
         for order, upload in enumerate(files):

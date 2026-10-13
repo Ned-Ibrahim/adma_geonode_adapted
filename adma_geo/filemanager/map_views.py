@@ -531,7 +531,13 @@ def update_layer_visibility(request, map_id, layer_id):
         
         layer.is_visible = visible
         layer.save(update_fields=['is_visible'])
-        
+
+        # The page hides the layer, so the Layer Group leaves it out too
+        layer_group_manager = LayerGroupManager()
+        success, message = layer_group_manager.update_layer_group(map_obj)
+        if not success:
+            return JsonResponse({'success': False, 'error': f'GeoServer error: {message}'})
+
         return JsonResponse({
             'success': True,
             'message': f'Layer visibility updated to {"visible" if visible else "hidden"}',
