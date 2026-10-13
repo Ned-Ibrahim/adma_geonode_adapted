@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load humanize %}
+{% load humanize file_display %}
 
 {% block title %}{{ folder_name }} - ADMA{% endblock %}
 
@@ -179,12 +179,12 @@
                     <div class="row">
                         {% for file in files %}
                         <div class="col-md-4 col-sm-6 mb-3">
-                            <div class="file-item" data-type="{{ file.file.file_type|title }}" data-size="{{ file.file.get_size_display }}" data-modified="{{ file.modified|date:'M d, Y H:i' }}">
+                            <div class="file-item" data-type="{{ file.file.file_type|file_type_label }}" data-size="{{ file.file.get_size_display }}" data-modified="{{ file.modified|date:'M d, Y H:i' }}">
                                 <div class="d-flex align-items-center">
                                     <i class="{{ file.file.get_icon_class }} file-icon"></i>
                                     <div class="flex-grow-1">
                                         <h6 class="mb-1 fw-bold" title="{{ file.name }}"><a href="{{ file.url }}" class="text-reset text-decoration-none">{{ file.name|truncatechars:25 }}</a></h6>
-                                        <small class="text-muted">{{ file.file.get_size_display }} • {{ file.file.file_type|title }}</small>
+                                        <small class="text-muted">{{ file.file.get_size_display }} • {{ file.file.file_type|file_type_label }}</small>
                                         <br>
                                         <small class="text-muted">{{ file.modified|date:"M d, Y" }}</small>
                                     </div>

@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load file_display %}
 
 {% block title %}{{ file.name }} - ADMA{% endblock %}
 
@@ -243,7 +244,7 @@
                             <tr>
                                 <th>Type:</th>
                                 <td>
-                                    <span class="badge bg-info">{{ file.file_type|title }}</span>
+                                    <span class="badge bg-info">{{ file.file_type|file_type_label }}</span>
                                 </td>
                             </tr>
                             <tr>

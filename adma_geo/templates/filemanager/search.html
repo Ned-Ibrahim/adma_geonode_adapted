@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load folder_counts humanize %}
+{% load folder_counts humanize file_display %}
 
 {% block title %}Search - ADMA{% endblock %}
 
@@ -358,7 +358,7 @@
                                             <div>
                                                 <div class="fw-bold">{{ result.name }}</div>
                                                 <small class="text-muted">
-                                                    {% if result.type == 'adapt_file' %}{{ result.metadata.file_type|title }} • {% endif %}{{ result.metadata.location }}
+                                                    {% if result.type == 'adapt_file' %}{{ result.metadata.file_type|file_type_label }} • {% endif %}{{ result.metadata.location }}
                                                 </small>
                                             </div>
                                         </div>
@@ -399,10 +399,10 @@
                                                 {% if result.type == 'file' and result.object.is_spatial %}
                                                     <small class="text-muted">
                                                         <span class="badge bg-info me-1">GIS</span>
-                                                        {{ result.object.file_type|title }}
+                                                        {{ result.object.file_type|file_type_label }}
                                                     </small>
                                                 {% elif result.type == 'file' %}
-                                                    <small class="text-muted">{{ result.object.file_type|title }}</small>
+                                                    <small class="text-muted">{{ result.object.file_type|file_type_label }}</small>
                                                 {% elif result.type == 'map' %}
                                                     <small class="text-muted">
                                                         <span class="badge bg-info me-1">GIS</span>
@@ -476,7 +476,7 @@
                                         </div>
                                         <small class="text-muted">
                                             {% if result.type == 'adapt_file' %}
-                                                {{ result.metadata.size }} • {{ result.metadata.file_type|title }}
+                                                {{ result.metadata.size }} • {{ result.metadata.file_type|file_type_label }}
                                                 {% if result.metadata.file_type == 'gis' %}
                                                     <span class="badge bg-info ms-1">GIS</span>
                                                 {% endif %}
@@ -510,7 +510,7 @@
                                         </div>
                                         <small class="text-muted">
                                             {% if result.type == 'file' %}
-                                                {{ result.object.get_size_display }} • {{ result.object.file_type|title }}
+                                                {{ result.object.get_size_display }} • {{ result.object.file_type|file_type_label }}
                                                 {% if result.object.is_spatial %}
                                                     <span class="badge bg-info ms-1">GIS</span>
                                                 {% endif %}

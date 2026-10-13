@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load static %}
+{% load static file_display %}
 
 {% block title %}Map Viewer - {{ file.name }}{% endblock %}
 
@@ -395,7 +395,7 @@
                         </tr>
                         <tr>
                             <td><strong>Type:</strong></td>
-                            <td>{{ file.file_type|capfirst }}</td>
+                            <td>{{ file.file_type|file_type_label }}</td>
                         </tr>
                         <tr>
                             <td><strong>Size:</strong></td>

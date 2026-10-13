@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load file_display %}
 
 {% block title %}ADMA - Agricultural Data Management & Analytics{% endblock %}
 
@@ -292,7 +293,7 @@
                                         </a>
                                     </td>
                                     <td>
-                                        <span class="badge bg-secondary">{{ file.file_type|title }}</span>
+                                        <span class="badge bg-secondary">{{ file.file_type|file_type_label }}</span>
                                         {% if file.is_spatial %}
                                             <span class="badge bg-info ms-1">GIS</span>
                                         {% endif %}
@@ -450,7 +451,7 @@
                                         </a>
                                     </td>
                                     <td>
-                                        <span class="badge bg-secondary">{{ file.file_type|title }}</span>
+                                        <span class="badge bg-secondary">{{ file.file_type|file_type_label }}</span>
                                         {% if file.is_spatial %}
                                             <span class="badge bg-info ms-1">GIS</span>
                                         {% endif %}
