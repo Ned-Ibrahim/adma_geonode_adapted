@@ -27,6 +27,14 @@
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #fafbfc;
+            /* A column, so the footer sits at the bottom of the window on a short page */
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        body > main {
+            flex: 1 0 auto;
         }
 
         /* Header Styles */
