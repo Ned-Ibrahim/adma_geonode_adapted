@@ -12,7 +12,8 @@ from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView, DetailView, CreateView
-from django.http import JsonResponse, HttpResponseForbidden
+from django.core.exceptions import PermissionDenied
+from django.http import JsonResponse
 from django.db import models
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
@@ -90,7 +91,7 @@ class MapDetailView(LoginRequiredMixin, DetailView):
         
         # Check permissions
         if not map_obj.is_public and map_obj.owner != self.request.user:
-            raise HttpResponseForbidden("You don't have permission to view this map.")
+            raise PermissionDenied("You don't have permission to view this map.")
         
         return map_obj
 

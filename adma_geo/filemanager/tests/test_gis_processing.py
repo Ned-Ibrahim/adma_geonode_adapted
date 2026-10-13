@@ -532,3 +532,10 @@ class LayerGroupTests(GisCase):
         for extent in (state_plane, None, '', 'not json', '{"type": "envelope"}'):
             self.assertIsNone(lonlat_box(extent), extent)
 
+
+class MapDetailTests(GisCase):
+    def test_someone_elses_private_map_is_forbidden(self):
+        private = Map.objects.create(name='Theirs', owner=self.user)
+        self.client.force_login(User.objects.create_user('viewer', password='pw'))
+        response = self.client.get(reverse('filemanager:map_detail', args=[private.id]))
+        self.assertEqual(response.status_code, 403)
