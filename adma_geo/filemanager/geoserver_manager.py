@@ -22,6 +22,82 @@ def epsg_of(crs):
     return None
 
 
+# ADMA's style for vector layers, kept in the ADMA workspace. One style serves
+# every geometry: a rule per dimension, as in GeoServer's own "generic" style.
+# Polygons get a light fill that shows the imagery through it and a strong
+# outline; deep orange reads on satellite imagery and on OpenStreetMap alike.
+VECTOR_STYLE = 'adma_vector'
+VECTOR_STYLE_COLOUR = '#FF6D00'
+VECTOR_STYLE_SLD = f"""<?xml version="1.0" encoding="UTF-8"?>
+<StyledLayerDescriptor version="1.0.0"
+    xmlns="http://www.opengis.net/sld" xmlns:ogc="http://www.opengis.net/ogc"
+    xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.opengis.net/sld http://schemas.opengis.net/sld/1.0.0/StyledLayerDescriptor.xsd">
+  <NamedLayer>
+    <Name>{VECTOR_STYLE}</Name>
+    <UserStyle>
+      <Title>ADMA vector</Title>
+      <FeatureTypeStyle>
+        <Rule>
+          <Name>polygon</Name>
+          <ogc:Filter><ogc:PropertyIsEqualTo>
+            <ogc:Function name="dimension"><ogc:Function name="geometry"/></ogc:Function>
+            <ogc:Literal>2</ogc:Literal>
+          </ogc:PropertyIsEqualTo></ogc:Filter>
+          <PolygonSymbolizer>
+            <Fill>
+              <CssParameter name="fill">{VECTOR_STYLE_COLOUR}</CssParameter>
+              <CssParameter name="fill-opacity">0.2</CssParameter>
+            </Fill>
+            <Stroke>
+              <CssParameter name="stroke">{VECTOR_STYLE_COLOUR}</CssParameter>
+              <CssParameter name="stroke-width">2.5</CssParameter>
+            </Stroke>
+          </PolygonSymbolizer>
+        </Rule>
+        <Rule>
+          <Name>line</Name>
+          <ogc:Filter><ogc:PropertyIsEqualTo>
+            <ogc:Function name="dimension"><ogc:Function name="geometry"/></ogc:Function>
+            <ogc:Literal>1</ogc:Literal>
+          </ogc:PropertyIsEqualTo></ogc:Filter>
+          <LineSymbolizer>
+            <Stroke>
+              <CssParameter name="stroke">{VECTOR_STYLE_COLOUR}</CssParameter>
+              <CssParameter name="stroke-width">3</CssParameter>
+            </Stroke>
+          </LineSymbolizer>
+        </Rule>
+        <Rule>
+          <Name>point</Name>
+          <ogc:Filter><ogc:PropertyIsEqualTo>
+            <ogc:Function name="dimension"><ogc:Function name="geometry"/></ogc:Function>
+            <ogc:Literal>0</ogc:Literal>
+          </ogc:PropertyIsEqualTo></ogc:Filter>
+          <PointSymbolizer>
+            <Graphic>
+              <Mark>
+                <WellKnownName>circle</WellKnownName>
+                <Fill><CssParameter name="fill">{VECTOR_STYLE_COLOUR}</CssParameter></Fill>
+                <Stroke>
+                  <CssParameter name="stroke">#FFFFFF</CssParameter>
+                  <CssParameter name="stroke-width">1.5</CssParameter>
+                </Stroke>
+              </Mark>
+              <Size>10</Size>
+            </Graphic>
+          </PointSymbolizer>
+        </Rule>
+      </FeatureTypeStyle>
+    </UserStyle>
+  </NamedLayer>
+</StyledLayerDescriptor>
+"""
+
+# The global styles GeoServer gives a new vector layer when it has no other.
+GENERIC_STYLES = {'generic', 'point', 'line', 'polygon'}
+
+
 class SystematicGeoServerManager:
     """
     Manages GeoServer operations with systematic naming and proper cleanup
@@ -107,8 +183,9 @@ class SystematicGeoServerManager:
            no store for most of them
         2. Check the layer's coordinate system against the EPSG code processing
            read from the file (ensure_layer_srs)
-        3. Ask WMS for a map of the file's extent: only an image counts
-        4. Store the layer metadata on the file
+        3. Draw a vector layer with ADMA's style (use_vector_style)
+        4. Ask WMS for a map of the file's extent: only an image counts
+        5. Store the layer metadata on the file
 
         Args:
             file_obj: File model instance, processed (crs and spatial_extent read from the file)
@@ -147,6 +224,12 @@ class SystematicGeoServerManager:
             ok, detail = self.ensure_layer_srs(systematic_name, layer_name, resource, epsg)
             if not ok:
                 return False, detail, None
+            if kind != 'raster':
+                styled, style_detail = self.use_vector_style(layer_name)
+                if not styled:
+                    # It still draws, in GeoServer's default style; fix_gis_layers tries again
+                    logger.warning(style_detail)
+                    file_obj.processing_log += f"\n{style_detail}"
             if not self.layer_draws(layer_name, file_obj.spatial_extent):
                 return False, f"GeoServer published {layer_name} but WMS cannot draw it", None
 
@@ -296,6 +379,52 @@ class SystematicGeoServerManager:
         if not state.get('latLonBoundingBox'):
             return 'no bounding box'
         return None
+
+    def ensure_vector_style(self):
+        """True once ADMA's vector style is in the workspace, creating it if GeoServer has none."""
+        auth = self.geoserver_api.auth
+        styles_url = f"{settings.GEOSERVER_URL}/rest/workspaces/{self.workspace}/styles"
+        if requests.get(f"{styles_url}/{VECTOR_STYLE}.json", auth=auth, timeout=30).status_code == 200:
+            return True
+        response = requests.post(
+            styles_url, params={'name': VECTOR_STYLE}, data=VECTOR_STYLE_SLD.encode(),
+            headers={'Content-Type': 'application/vnd.ogc.sld+xml'}, auth=auth, timeout=30,
+        )
+        if response.status_code == 201:
+            return True
+        # Workers publishing at the same time race to create it: one wins, the others find it there.
+        return requests.get(f"{styles_url}/{VECTOR_STYLE}.json", auth=auth, timeout=30).status_code == 200
+
+    def vector_style_problem(self, layer_name):
+        """'GeoServer default style polygon' (say) if a vector layer still draws in a generic global style, else None.
+
+        A layer given any other style, ADMA's or one picked in GeoServer, is left as it is.
+        """
+        response = requests.get(
+            f"{settings.GEOSERVER_URL}/rest/layers/{self.workspace}:{layer_name}.json",
+            auth=self.geoserver_api.auth, timeout=30,
+        )
+        response.raise_for_status()
+        style = response.json().get('layer', {}).get('defaultStyle') or {}
+        name = style.get('name') or ''
+        if not name:
+            return 'no default style'
+        if not style.get('workspace') and name in GENERIC_STYLES:
+            return f'GeoServer default style {name}'
+        return None
+
+    def use_vector_style(self, layer_name):
+        """Make ADMA's vector style the default style of `layer_name`; (success: bool, message: str)."""
+        if not self.ensure_vector_style():
+            return False, f"GeoServer refused to create style {self.workspace}:{VECTOR_STYLE}"
+        response = requests.put(
+            f"{settings.GEOSERVER_URL}/rest/layers/{self.workspace}:{layer_name}.json",
+            json={'layer': {'defaultStyle': {'name': VECTOR_STYLE, 'workspace': self.workspace}}},
+            auth=self.geoserver_api.auth, timeout=30,
+        )
+        if response.status_code not in (200, 201):
+            return False, f"GeoServer refused style {VECTOR_STYLE} for {layer_name}: {response.status_code}"
+        return True, f"styled {self.workspace}:{VECTOR_STYLE}"
 
     def layer_draws(self, layer_name, spatial_extent):
         """True if a WMS GetMap of the stored extent (longitude and latitude) answers with an image."""

@@ -14,6 +14,9 @@ command finds both:
   bounding box gets the EPSG code read from the file (FORCE_DECLARED), is
   enabled and its bounding boxes recalculated. A layer GeoServer has lost, or a
   file processed but never published, is published again.
+* A vector layer still drawn in one of GeoServer's generic default styles
+  (polygon, line, point: an opaque gray block over the imagery) is given
+  ADMA's vector style. Rasters, and layers given any other style, keep theirs.
 
 Files still 'pending' or 'processing' are left alone: ADAPT files are processed
 when someone opens their map.
@@ -102,7 +105,12 @@ class Command(BaseCommand):
 
         problem = self.layer_problem(file_obj)
         if problem is None:
-            return 'ok', file_obj.crs
+            style = self.style_problem(file_obj)
+            if style is None:
+                return 'ok', file_obj.crs
+            if not self.apply:
+                return 'would restyle', style
+            return self.restyle(file_obj, style)
         if not self.apply:
             return 'would repair', problem
         return self.repair(file_obj, problem)
@@ -121,6 +129,30 @@ class Command(BaseCommand):
         if file_obj.gis_status != 'published' or not file_obj.geoserver_layer_name:
             return 'not published'
         return self.manager.layer_problem(*self.layer_of(file_obj))
+
+    def style_problem(self, file_obj):
+        """Why a vector layer needs ADMA's style ('GeoServer default style polygon', say), or None."""
+        store, layer, resource = self.layer_of(file_obj)
+        if resource != 'featureType':
+            return None
+        return self.manager.vector_style_problem(layer)
+
+    def restyle(self, file_obj, style):
+        """Give the file's vector layer ADMA's style, as publishing does now."""
+        success, message = self.manager.use_vector_style(file_obj.geoserver_layer_name)
+        if not success:
+            return 'error', message
+        file_obj.processing_log += f'\n✓ Layer restyled: {message}'
+        file_obj.save()
+        return 'restyled', f'{style}: {message}'
+
+    def style_after_repair(self, file_obj):
+        """Restyle a repaired vector layer still in a generic style; what to add to its report line, or ''."""
+        style = self.style_problem(file_obj)
+        if style is None:
+            return ''
+        outcome, message = self.restyle(file_obj, style)
+        return f'; {message}' if outcome == 'restyled' else f'; restyle failed: {message}'
 
     def layer_of(self, file_obj):
         resource = 'coverage' if gis_read.kind_of(file_obj.name) == 'raster' else 'featureType'
@@ -156,7 +188,7 @@ class Command(BaseCommand):
             if file_obj.gis_status != 'published':
                 file_obj.gis_status = 'published'
                 file_obj.save()
-            return 'ok', 'layer draws'
+            return 'ok', 'layer draws' + self.style_after_repair(file_obj)
         store, layer, resource = self.layer_of(file_obj)
         success, message = self.manager.ensure_layer_srs(store, layer, resource, epsg_of(file_obj.crs))
         if success and not self.manager.layer_draws(layer, file_obj.spatial_extent):
@@ -166,7 +198,7 @@ class Command(BaseCommand):
         file_obj.gis_status = 'published'
         file_obj.processing_log += f'\n✓ Layer repaired: {message}'
         file_obj.save()
-        return 'repaired', f'{problem}: {message}'
+        return 'repaired', f'{problem}: {message}' + self.style_after_repair(file_obj)
 
     def fail(self, file_obj, what, message):
         file_obj.gis_status = 'error'

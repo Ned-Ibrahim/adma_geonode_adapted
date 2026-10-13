@@ -29,7 +29,7 @@ from shapely.geometry import box
 
 from filemanager import adapt_records, adapt_storage, gis_read
 from filemanager.geoserver_layer_group_manager import LayerGroupManager, lonlat_box
-from filemanager.geoserver_manager import SystematicGeoServerManager
+from filemanager.geoserver_manager import VECTOR_STYLE, SystematicGeoServerManager
 from filemanager.gis_utils import process_gis_file, shapefile_parts
 from filemanager.models import File, Folder, Map, MapLayer
 
@@ -255,23 +255,36 @@ class FakeGeoServer:
 
     RequestException = requests.RequestException
 
-    def __init__(self, srs=None, enabled=False):
+    def __init__(self, srs=None, enabled=False, style='polygon'):
         self.state = {'name': 'layer', 'srs': srs, 'enabled': enabled, 'projectionPolicy': 'NONE'}
         if srs:
             self.state['latLonBoundingBox'] = dict(zip(('minx', 'miny', 'maxx', 'maxy'), FIELD))
         self.puts = []
+        self.default_style = {'name': style}
+        self.styles = set()  # the workspace's styles
+        self.style_posts = []
 
     def get(self, url, **kwargs):
+        if '/styles/' in url:
+            return self.answer(200 if url.rsplit('/', 1)[-1].removesuffix('.json') in self.styles else 404)
         if url.endswith('/wms'):
             drawn = self.state.get('srs') and self.state.get('enabled')
             return self.answer(200, content_type='image/png' if drawn else 'application/vnd.ogc.se_xml')
         if url.endswith('/featuretypes.json'):
             return self.answer(200, {'featureTypes': {'featureType': [{'name': kwargs.get('name', 'store')}]}})
         if '/rest/layers/' in url:
-            return self.answer(200, {'layer': {'enabled': True}})
+            return self.answer(200, {'layer': {'enabled': True, 'defaultStyle': self.default_style}})
         return self.answer(200, {'featureType': dict(self.state)})
 
+    def post(self, url, data=None, params=None, headers=None, **kwargs):
+        self.style_posts.append((url, params, headers['Content-Type']))
+        self.styles.add(params['name'])
+        return self.answer(201)
+
     def put(self, url, json=None, params=None, **kwargs):
+        if '/rest/layers/' in url:
+            self.default_style = json['layer']['defaultStyle']
+            return self.answer(200)
         self.puts.append((url, json, params))
         change = json.get('featureType', {})
         self.state.update(change)
@@ -319,6 +332,45 @@ class PublishTests(GisCase):
         self.assertTrue(ok, message)
         self.assertEqual(fake.puts, [])
 
+    def test_vector_layer_draws_in_adma_style_made_once(self):
+        fake = FakeGeoServer(srs='EPSG:6880', enabled=True)
+        _, _, (ok, message, _), _ = self.publish(fake)
+        self.assertTrue(ok, message)
+        self.assertEqual(fake.default_style, {'name': VECTOR_STYLE, 'workspace': 'adma_geo'})
+        [(url, params, content_type)] = fake.style_posts
+        self.assertTrue(url.endswith('/rest/workspaces/adma_geo/styles'), url)
+        self.assertEqual((params, content_type), ({'name': VECTOR_STYLE}, 'application/vnd.ogc.sld+xml'))
+        again = FakeGeoServer(srs='EPSG:6880', enabled=True)
+        again.styles = {VECTOR_STYLE}
+        self.assertTrue(self.publish(again)[2][0])
+        self.assertEqual(again.style_posts, [])
+        self.assertEqual(again.default_style, {'name': VECTOR_STYLE, 'workspace': 'adma_geo'})
+
+    def test_raster_layer_keeps_its_own_style(self):
+        tif = self.upload('dem_utm.tif')
+        self.assertTrue(process_gis_file(tif)[0])
+        manager = SystematicGeoServerManager()
+        with mock.patch.object(manager.geoserver_api, 'create_workspace', return_value=True), \
+                mock.patch.object(manager, '_upload_raster', return_value=True), \
+                mock.patch.object(manager, '_find_resource', return_value='dem'), \
+                mock.patch.object(manager, 'ensure_layer_srs', return_value=(True, 'EPSG:32614')), \
+                mock.patch.object(manager, 'layer_draws', return_value=True), \
+                mock.patch.object(manager, 'use_vector_style') as use_style:
+            ok, message, _ = manager.publish_file_to_geoserver(tif)
+        self.assertTrue(ok, message)
+        use_style.assert_not_called()
+
+    def test_only_generic_geoserver_styles_count_as_unstyled(self):
+        manager = SystematicGeoServerManager()
+        for style, problem in (({'name': 'polygon'}, 'GeoServer default style polygon'),
+                               ({'name': 'line'}, 'GeoServer default style line'),
+                               ({'name': VECTOR_STYLE, 'workspace': 'adma_geo'}, None),
+                               ({'name': 'fields_by_crop'}, None)):
+            fake = FakeGeoServer(srs='EPSG:6880', enabled=True)
+            fake.default_style = style
+            with mock.patch('filemanager.geoserver_manager.requests', fake):
+                self.assertEqual(manager.vector_style_problem('layer'), problem, style)
+
 
 class RepairCommandTests(GisCase):
     def run_command(self, *args):
@@ -347,14 +399,39 @@ class RepairCommandTests(GisCase):
         manager = SystematicGeoServerManager
         with mock.patch.object(manager, 'layer_problem', return_value='srs null'), \
                 mock.patch.object(manager, 'ensure_layer_srs', return_value=(True, 'declared EPSG:6880')) as ensure, \
-                mock.patch.object(manager, 'layer_draws', return_value=True):
+                mock.patch.object(manager, 'layer_draws', return_value=True), \
+                mock.patch.object(manager, 'vector_style_problem', return_value=None):
             out = self.run_command('--apply')
         self.assertIn(f'{shp.id} field_sp.shp: reprocessed (EPSG:6880; srs null: declared EPSG:6880)', out)
         ensure.assert_called_once_with('old_layer', 'old_layer', 'featureType', 6880)
         shp.refresh_from_db()
         self.assertEqual((shp.gis_status, shp.crs), ('published', 'EPSG:6880'))
-        with mock.patch.object(manager, 'layer_problem', return_value=None):
+        with mock.patch.object(manager, 'layer_problem', return_value=None), \
+                mock.patch.object(manager, 'vector_style_problem', return_value=None):
             self.assertIn(f'{shp.id} field_sp.shp: ok (EPSG:6880)', self.run_command('--apply'))
+
+    def test_vector_layer_in_a_generic_style_is_restyled_once_and_rasters_are_not(self):
+        shp = self.upload_shapefile()
+        tif = self.upload('dem_utm.tif')
+        for upload in (shp, tif):
+            self.assertTrue(process_gis_file(upload)[0])
+            upload.gis_status = 'published'
+            upload.geoserver_layer_name = upload.geoserver_datastore_name = f'layer_{upload.name[:5]}'
+            upload.save()
+        fake = FakeGeoServer(srs='EPSG:6880', enabled=True)
+        with mock.patch.object(SystematicGeoServerManager, 'layer_problem', return_value=None), \
+                mock.patch('filemanager.geoserver_manager.requests', fake):
+            out = self.run_command()
+            self.assertIn(f'{shp.id} field_sp.shp: would restyle (GeoServer default style polygon)', out)
+            self.assertIn(f'{tif.id} dem_utm.tif: ok (EPSG:32614)', out)
+            self.assertEqual(fake.default_style, {'name': 'polygon'})
+
+            out = self.run_command('--apply')
+            self.assertIn(f'{shp.id} field_sp.shp: restyled (GeoServer default style polygon: '
+                          f'styled adma_geo:{VECTOR_STYLE})', out)
+            self.assertEqual(fake.default_style, {'name': VECTOR_STYLE, 'workspace': 'adma_geo'})
+            self.assertIn(f'{shp.id} field_sp.shp: ok (EPSG:6880)', self.run_command('--apply'))
+        self.assertEqual(len(fake.style_posts), 1)
 
     def test_pending_adapt_files_are_left_for_their_map(self):
         self.put_on_share('Soils/dem.tif', 'dem_utm.tif')
@@ -557,7 +634,8 @@ class LayerGroupTests(GisCase):
 
     def fix_gis_layers(self, *args):
         out = io.StringIO()
-        with mock.patch.object(SystematicGeoServerManager, 'layer_problem', return_value=None):
+        with mock.patch.object(SystematicGeoServerManager, 'layer_problem', return_value=None), \
+                mock.patch.object(SystematicGeoServerManager, 'vector_style_problem', return_value=None):
             call_command('fix_gis_layers', *args, stdout=out)
         return out.getvalue()
 
