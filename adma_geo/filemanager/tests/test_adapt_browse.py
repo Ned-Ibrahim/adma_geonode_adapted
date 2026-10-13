@@ -186,7 +186,7 @@ class BrowsePages(BrowseCase):
         self.assertEqual(self.names(response), ['2024', 'cores.csv'])
         self.assertContains(response, adapt_share.folder_url('Soils/2024'))
         self.assertContains(response, adapt_share.file_url('Soils/cores.csv'))
-        self.assertContains(response, '1.0 B')
+        self.assertContains(response, 'data-size="1 B"')
 
     def test_breadcrumbs_lead_back_up(self):
         response = self.get(self.reader, '/adapt/browse/Soils/2024/')

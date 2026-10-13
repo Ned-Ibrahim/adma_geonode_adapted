@@ -365,7 +365,7 @@ class SearchWiring(IndexCase):
         hit, = search_engine.search(self.fresh(self.alice), query='cores')
         self.assertEqual((hit['type'], hit['url']), ('adapt_file', adapt_share.file_url('Soils/cores.csv')))
         self.assertEqual(hit['metadata']['path'], 'Soils/cores.csv')
-        self.assertEqual(hit['metadata']['size'], '13.0 B')
+        self.assertEqual(hit['metadata']['size'], '13 B')
         self.assertFalse(hit['metadata']['is_public'])
 
     def test_rows_from_the_share_are_never_searched(self):

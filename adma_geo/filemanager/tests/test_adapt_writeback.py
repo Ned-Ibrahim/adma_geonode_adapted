@@ -175,7 +175,7 @@ class UploadByPath(WriteBackCase):
         self.assertEqual(body['files'], [{
             'id': None,
             'name': 'field.csv',
-            'size': '8.0 B',
+            'size': '8 B',
             'url': adapt_share.file_url('Soils/field.csv'),
             'path': 'Soils/field.csv',
             'is_spatial': False,

@@ -374,12 +374,14 @@ class File(models.Model):
 
     @staticmethod
     def describe_size(size):
-        """A size in bytes as people read it, for example "2.5 MB"."""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        """A size in bytes as people read it, for example "236 B" or "2.5 MB"."""
+        if size < 1024:
+            return f"{size:.0f} B"
+        for unit in ['KB', 'MB', 'GB', 'TB']:
+            size /= 1024
             if size < 1024:
                 return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} PB"
+        return f"{size / 1024:.1f} PB"
 
     def get_icon_class(self):
         """Return FontAwesome icon class based on file type"""

@@ -721,7 +721,7 @@ def api_folder_info(request, folder_id):
             'zip_filename': zip_filename,
             'file_count': file_count,
             'total_size': total_size,
-            'total_size_display': _format_file_size(total_size),
+            'total_size_display': File.describe_size(total_size),
             'is_public': folder.is_public,
             'created_at': folder.created_at,
             'download_url': f'/api/v1/folders/{folder.id}/download/'
@@ -737,20 +737,6 @@ def api_folder_info(request, folder_id):
             {'error': f'Failed to get folder info: {str(e)}'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
-
-def _format_file_size(size_bytes):
-    """Helper function to format file size in human-readable format"""
-    if size_bytes == 0:
-        return "0 B"
-    
-    size_names = ["B", "KB", "MB", "GB", "TB"]
-    i = 0
-    while size_bytes >= 1024 and i < len(size_names) - 1:
-        size_bytes /= 1024.0
-        i += 1
-    
-    return f"{size_bytes:.1f} {size_names[i]}"
 
 
 # --------------------------------------------------------- ADAPT share by path
