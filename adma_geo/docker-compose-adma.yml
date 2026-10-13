@@ -178,6 +178,8 @@ services:
       COMMUNITY_EXTENSIONS: ""
     volumes:
       - adma_geo_geoserver_data:/opt/geoserver/data_dir
+      # Versioned request limits; the image only writes its defaults when the file is missing
+      - ./geoserver/controlflow.properties:/opt/geoserver/data_dir/controlflow.properties:ro
       - adma_geo_media:/app/media
     ports:
       - "8080:8080"
