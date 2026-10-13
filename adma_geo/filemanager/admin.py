@@ -1,15 +1,41 @@
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.contrib.admin.actions import delete_selected as django_delete_selected
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
-from . import adapt_share
+from . import adapt_share, permissions
 from .models import Folder, File, Map, MapLayer, Tool, FolderGrant, RosterGroup, UserProfile
 
 User = get_user_model()
 
 
+class KeepAdaptRows:
+    """Nothing on the ADAPT share is deleted here either: no ADAPT row, and no folder with one beneath it.
+
+    The change page offers no Delete for these rows, and a bulk delete whose
+    selection includes any of them deletes nothing and says why.
+    """
+    actions = ['delete_selected']
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and permissions.touches_adapt([obj]):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    @admin.action(permissions=['delete'], description=django_delete_selected.short_description)
+    def delete_selected(self, request, queryset):
+        if permissions.touches_adapt(queryset):
+            self.message_user(
+                request,
+                f'Nothing was deleted: the selection includes ADAPT content. {permissions.ADAPT_DELETE_MESSAGE}',
+                messages.ERROR,
+            )
+            return None
+        return django_delete_selected(self, request, queryset)
+
+
 @admin.register(Folder)
-class FolderAdmin(admin.ModelAdmin):
+class FolderAdmin(KeepAdaptRows, admin.ModelAdmin):
     list_display = ['name', 'owner', 'parent', 'is_public', 'created_at']
     list_filter = ['is_public', 'created_at']
     search_fields = ['name']
@@ -17,7 +43,7 @@ class FolderAdmin(admin.ModelAdmin):
 
 
 @admin.register(File)
-class FileAdmin(admin.ModelAdmin):
+class FileAdmin(KeepAdaptRows, admin.ModelAdmin):
     list_display = ['name', 'owner', 'folder', 'file_type', 'file_size', 'is_public', 'created_at']
     list_filter = ['file_type', 'is_public', 'created_at']
     search_fields = ['name']

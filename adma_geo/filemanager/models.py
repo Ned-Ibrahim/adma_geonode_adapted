@@ -134,6 +134,11 @@ class Folder(models.Model):
         return " | ".join(metadata_parts)
     
     @property
+    def is_adapt(self):
+        """True for a row standing for a folder on the ADAPT share. Pages offer no Delete for these."""
+        return self.is_third_party and self.third_party_source == 'adapt'
+
+    @property
     def uses_cached_totals(self):
         """True for folders whose totals come from recompute_folder_sizes rather
         than a live recursive walk. Only reference-backed sources qualify: John Deere
@@ -452,6 +457,11 @@ class File(models.Model):
         return [membership.map for membership in self.map_memberships.all()]
 
     # ---- ADAPT (third-party warehouse) reference support ----
+    @property
+    def is_adapt(self):
+        """True for a record of a file on the ADAPT share. Pages offer no Delete for these."""
+        return self.is_third_party and self.third_party_source == 'adapt'
+
     def is_adapt_reference(self):
         """True if this File references a file on the mounted ADAPT share
         rather than storing a local copy in MEDIA_ROOT."""

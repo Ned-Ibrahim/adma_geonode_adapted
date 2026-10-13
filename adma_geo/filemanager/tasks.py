@@ -4,6 +4,7 @@ Celery tasks for processing GIS files and managing embeddings
 from celery import shared_task
 from django.contrib.auth import get_user_model
 from .models import File, Folder
+from .permissions import ADAPT_DELETE_MESSAGE, touches_adapt
 from .gis_utils import process_gis_file, publish_to_geoserver, bundle_and_publish_shapefile
 from datetime import date
 import json
@@ -213,6 +214,19 @@ def delayed_shapefile_publish_task(self, file_id, max_retries=5):
 # Search now uses PostgreSQL text matching instead of embeddings
 
 
+def _keeps_adapt_row(model, item):
+    """True, after logging it, if `item` is or holds ADAPT content, which is never deleted from ADMA.
+
+    delete_item refuses these before queuing a task. One queued before that
+    rule existed is dropped here, and the row it hid is shown again.
+    """
+    if not touches_adapt([item]):
+        return False
+    logger.warning(f"Not deleting {model.__name__.lower()} {item.name} (ID: {item.pk}): {ADAPT_DELETE_MESSAGE}")
+    model.objects.filter(pk=item.pk).update(deletion_in_progress=False)
+    return True
+
+
 @shared_task(bind=True)
 def delete_file_async_task(self, file_id, file_name):
     """
@@ -233,6 +247,8 @@ def delete_file_async_task(self, file_id, file_name):
         except File.DoesNotExist:
             logger.warning(f"File {file_name} (ID: {file_id}) not found - may have been already deleted")
             return f"File {file_name} not found - may have been already deleted"
+        if _keeps_adapt_row(File, file_obj):
+            return f"Kept file {file_name}: {ADAPT_DELETE_MESSAGE}"
         
         # Perform complete file deletion
         from .views import delete_file_complete
@@ -266,6 +282,8 @@ def delete_folder_async_task(self, folder_id, folder_name):
         except Folder.DoesNotExist:
             logger.warning(f"Folder {folder_name} (ID: {folder_id}) not found - may have been already deleted")
             return f"Folder {folder_name} not found - may have been already deleted"
+        if _keeps_adapt_row(Folder, folder_obj):
+            return f"Kept folder {folder_name}: {ADAPT_DELETE_MESSAGE}"
         
         # Perform complete folder deletion
         from .views import delete_folder_complete
@@ -290,7 +308,6 @@ def toggle_folder_visibility_recursive_task(self, folder_id, is_public, folder_n
     try:
         from django.apps import apps
         Folder = apps.get_model('filemanager', 'Folder')
-        File = apps.get_model('filemanager', 'File')
         
         logger.info(f"Starting async recursive visibility toggle for folder: {folder_name} (ID: {folder_id}) to {'public' if is_public else 'private'}")
         
@@ -953,7 +970,7 @@ def run_si_tool_task(
         return result
         
     except Exception as e:
-        logger.exception(f"Error in SI Tool task")
+        logger.exception("Error in SI Tool task")
         return {"success": False, "error": str(e)}
 
 
@@ -1123,7 +1140,6 @@ def sync_realm5_task(self):
     This task is designed to run daily via Celery Beat.
     """
     import json
-    import os
     from datetime import date, timedelta
     from django.conf import settings
     from django.core.files.base import ContentFile

@@ -1,4 +1,4 @@
-"""One place that answers "may this user read or write this object?".
+"""One place that answers "may this user read, write or delete this object?".
 
 Anything that is not on the ADAPT share keeps ADMA's own rule: the owner may,
 the public may read, nobody else.
@@ -15,10 +15,13 @@ path on the share (see filemanager.adapt_share):
 - No grant, no access. ADAPT rows ignore is_public and ownership: they belong to
   the sync account or the uploader, and older rows were created public.
 - Superusers see everything.
+- Nobody deletes ADAPT content from ADMA: not a writer, not the row's owner, not
+  a superuser. ADMA never deletes on the share, and it keeps its ADAPT rows too.
+  The operator commands (adapt_lazy_cleanup, reset_system) are the exception.
 
 Paths compare without case, as on the share. The *_path functions answer for a
-path; can_read, can_write and can_list_files answer for a Folder or File row and
-look ADAPT rows up by the path they record.
+path; can_read, can_write, can_list_files and can_delete answer for a Folder or
+File row and look ADAPT rows up by the path they record.
 """
 from typing import Iterable, List, Optional, Set
 
@@ -27,7 +30,9 @@ from django.utils.functional import cached_property
 
 from . import adapt_share
 from .adapt_storage import ROOT_SENTINEL
-from .models import Folder, FolderGrant
+from .models import File, Folder, FolderGrant
+
+ADAPT_DELETE_MESSAGE = 'Files and folders on the ADAPT share cannot be deleted from ADMA.'
 
 
 def _is_adapt(obj) -> bool:
@@ -176,6 +181,36 @@ def can_list_files(user, folder) -> bool:
     if not _is_adapt(folder):
         return can_read(user, folder)
     return can_list_files_path(user, adapt_path(folder))
+
+
+def can_delete(user, obj) -> bool:
+    """Whether `user` may delete `obj`: its owner may, unless that would delete ADAPT rows (see touches_adapt)."""
+    if obj is None or not _signed_in(user):
+        return False
+    return obj.owner_id == user.id and not touches_adapt([obj])
+
+
+def touches_adapt(objects: Iterable) -> bool:
+    """True if deleting these Files and Folders would delete an ADAPT row.
+
+    That is an ADAPT row among them or, since a folder goes with everything in
+    it, one anywhere beneath one of the folders. Callers refuse the whole delete.
+    """
+    objects = list(objects)
+    if any(_is_adapt(obj) for obj in objects):
+        return True
+    adapt = Q(is_third_party=True, third_party_source='adapt')
+    level = {obj.pk for obj in objects if isinstance(obj, Folder)}
+    seen = set()
+    while level:
+        seen |= level
+        if File.objects.filter(adapt, folder__in=level).exists():
+            return True
+        children = Folder.objects.filter(parent__in=level)
+        if children.filter(adapt).exists():
+            return True
+        level = set(children.values_list('pk', flat=True)) - seen
+    return False
 
 
 class FolderCounts:

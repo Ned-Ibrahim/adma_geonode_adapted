@@ -739,9 +739,11 @@
                                                     <i class="fas fa-map-marked-alt me-2"></i>View on Map
                                                 </a></li>
                                                 {% endif %}
+                                                {% if not file.is_adapt %}
                                                 <li><a class="dropdown-item text-danger" href="#" onclick="deleteItem('file', '{{ file.id }}', '{{ file.name }}')">
                                                     <i class="fas fa-trash me-2"></i>Delete
                                                 </a></li>
+                                                {% endif %}
                                             </ul>
                                         </div>
                                     </td>
@@ -859,9 +861,11 @@
                                                     <i class="fas fa-external-link-alt me-2"></i>View on {{ file.third_party_source|default:"Source" }}
                                                 </a></li>
                                                 {% endif %}
+                                                {% if not file.is_adapt %}
                                                 <li><a class="dropdown-item text-danger" href="#" onclick="deleteItem('file', '{{ file.id }}', '{{ file.name }}')">
                                                     <i class="fas fa-trash me-2"></i>Delete
                                                 </a></li>
+                                                {% endif %}
                                             </ul>
                                         </div>
                                     </div>
