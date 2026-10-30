@@ -5,7 +5,7 @@ from django.test import SimpleTestCase
 from django.utils import timezone
 
 from filemanager.models import File
-from filemanager.templatetags.file_display import ago, file_type_label
+from filemanager.templatetags.file_display import ago, breakable, file_type_label
 
 
 class FileDisplayTests(SimpleTestCase):
@@ -25,3 +25,12 @@ class FileDisplayTests(SimpleTestCase):
         self.assertEqual(ago(now), 'just now')
         self.assertEqual(ago(now - timedelta(seconds=59)), 'just now')
         self.assertEqual(ago(now - timedelta(minutes=3, seconds=5)), '3\xa0minutes ago')
+
+    def test_long_names_may_wrap_after_underscores_and_hyphens_but_keep_their_extension(self):
+        self.assertEqual(breakable('DJI_20250529121645_0001_MS_G.TIF'),
+                         'DJI_<wbr>20250529121645_<wbr>0001_<wbr>MS_<wbr>G.TIF')
+        self.assertEqual(breakable('field-2024.boundary.shp'), 'field-<wbr>2024<wbr>.boundary.shp')
+        self.assertEqual(breakable('plain.tif'), 'plain.tif')
+
+    def test_breakable_names_are_still_escaped(self):
+        self.assertEqual(breakable('<b>_x&y.tif'), '&lt;b&gt;_<wbr>x&amp;y.tif')

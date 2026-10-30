@@ -207,7 +207,6 @@
     .col-lg-3 .table {
         width: 100% !important;
         max-width: 100% !important;
-        table-layout: fixed !important;
         margin-bottom: 0 !important;
         font-size: 0.85rem !important;
         border-collapse: collapse !important;
@@ -219,12 +218,12 @@
         border: none !important;
         word-wrap: break-word !important;
         overflow-wrap: break-word !important;
-        hyphens: auto !important;
         line-height: 1.3 !important;
     }
     
+    /* As wide as the card's longest label, so a label never runs into its value */
     .col-lg-3 .table td:first-child {
-        width: 35% !important;
+        width: 1% !important;
         font-weight: 600 !important;
         color: #495057 !important;
         white-space: nowrap !important;
@@ -232,7 +231,7 @@
     }
     
     .col-lg-3 .table td:last-child {
-        width: 65% !important;
+        width: auto !important;
         word-break: break-word !important;
         overflow-wrap: anywhere !important;
         min-width: 0 !important;
@@ -245,11 +244,13 @@
         display: block !important;
     }
     
-    /* Status badges styling */
+    /* Status badges styling: one line unless the column is too narrow for it */
     .col-lg-3 .badge {
         font-size: 0.7rem !important;
         padding: 0.25em 0.5em !important;
-        white-space: nowrap !important;
+        white-space: normal !important;
+        text-align: left !important;
+        line-height: 1.25 !important;
         display: inline-block !important;
     }
     
@@ -307,21 +308,21 @@
         {% endif %}
         <li class="breadcrumb-item">
             {% if is_public_view %}
-                <a href="{% url 'filemanager:public_file_detail' file.id %}">{{ file.name }}</a>
+                <a href="{% url 'filemanager:public_file_detail' file.id %}">{{ file.name|breakable }}</a>
             {% else %}
-                <a href="{% url 'filemanager:file_detail' file.id %}">{{ file.name }}</a>
+                <a href="{% url 'filemanager:file_detail' file.id %}">{{ file.name|breakable }}</a>
             {% endif %}
         </li>
         <li class="breadcrumb-item active">Map View</li>
     </ol>
 </nav>
 
-<div class="row">
+<div class="row gy-4">
     <div class="col-lg-9">
         <!-- Map Controls -->
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="mb-0">
-                <i class="fas fa-map me-2"></i>{{ file.name }}
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h5 class="mb-0 text-break">
+                <i class="fas fa-map me-2"></i>{{ file.name|breakable }}
             </h5>
             {% if file.gis_status == 'published' and geoserver_info or file.gis_status == 'processed' and geoserver_info %}
             <div class="d-flex align-items-center gap-2">
@@ -378,7 +379,7 @@
                     <table class="table table-sm">
                         <tr>
                             <td><strong>Name:</strong></td>
-                            <td>{{ file.name }}</td>
+                            <td>{{ file.name|breakable }}</td>
                         </tr>
                         <tr>
                             <td><strong>Type:</strong></td>

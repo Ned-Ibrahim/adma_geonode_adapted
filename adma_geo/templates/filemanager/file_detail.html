@@ -44,7 +44,7 @@
             {% endif %}
         {% endif %}
         <li class="breadcrumb-item active">
-            <i class="{{ file.get_icon_class }} me-1"></i>{{ file.name }}
+            <i class="{{ file.get_icon_class }} me-1"></i>{{ file.name|breakable }}
         </li>
     </ol>
 </nav>
@@ -54,8 +54,8 @@
     <div class="col-lg-8">
         <div class="card mb-4">
             <div class="card-header">
-                <h4 class="mb-0">
-                    <i class="{{ file.get_icon_class }} me-2"></i>{{ file.name }}
+                <h4 class="mb-0 text-break">
+                    <i class="{{ file.get_icon_class }} me-2"></i>{{ file.name|breakable }}
                 </h4>
             </div>
             <div class="card-body">
@@ -235,7 +235,7 @@
                         <table class="table table-sm">
                             <tr>
                                 <th width="30%">Name:</th>
-                                <td>{{ file.name }}</td>
+                                <td class="text-break">{{ file.name|breakable }}</td>
                             </tr>
                             <tr>
                                 <th>Size:</th>
