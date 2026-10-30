@@ -287,7 +287,13 @@
                 </a>
             {% endif %}
         </li>
-        {% if file.folder %}
+        {% if adapt_crumbs %}
+            {% for crumb_name, crumb_url in adapt_crumbs %}
+            <li class="breadcrumb-item">
+                <a href="{{ crumb_url }}">{{ crumb_name }}</a>
+            </li>
+            {% endfor %}
+        {% elif file.folder %}
             {% if is_public_view and public_breadcrumbs %}
                 {% for breadcrumb in public_breadcrumbs %}
                 <li class="breadcrumb-item">

@@ -993,6 +993,17 @@ def public_folder_detail(request, folder_id):
         'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
     })
 
+def adapt_crumbs_of(file_obj):
+    """[(name, url)] of the ADAPT folders an ADAPT record sits in, from ADAPT down; None for any other File."""
+    adapt_rel = adapt_records.path_of(file_obj)
+    if adapt_rel is None:
+        return None
+    return [('ADAPT', adapt_share.folder_url(''))] + [
+        (name, adapt_share.folder_url(path))
+        for name, path in adapt_share.breadcrumbs(adapt_share.parent(adapt_rel))
+    ]
+
+
 @login_required
 def file_detail(request, file_id):
     """View file details and preview"""
@@ -1005,16 +1016,10 @@ def file_detail(request, file_id):
 
     # An ADAPT record sits on the share by its path rather than in a Folder, and
     # outlives its file there: a file gone from the share has nothing to preview.
-    adapt_rel = adapt_records.path_of(file_obj)
     is_adapt_record = file_obj.is_third_party and file_obj.third_party_source == 'adapt'
     adapt_gone = adapt_records.is_gone(file_obj)
-    adapt_crumbs = adapt_folder_name = adapt_folder_url = None
-    if adapt_rel is not None:
-        adapt_crumbs = [('ADAPT', adapt_share.folder_url(''))] + [
-            (name, adapt_share.folder_url(path))
-            for name, path in adapt_share.breadcrumbs(adapt_share.parent(adapt_rel))
-        ]
-        adapt_folder_name, adapt_folder_url = adapt_crumbs[-1]
+    adapt_crumbs = adapt_crumbs_of(file_obj)
+    adapt_folder_name, adapt_folder_url = adapt_crumbs[-1] if adapt_crumbs else (None, None)
     preview_type = None if adapt_gone else file_obj.file_type
 
     # For text files, read content for preview
@@ -1775,6 +1780,7 @@ def map_viewer(request, file_id):
     return render(request, 'filemanager/map_viewer.html', {
         'file': file_obj,
         'geoserver_info': geoserver_info,
+        'adapt_crumbs': adapt_crumbs_of(file_obj),
         'gis_problem': gis_problem(file_obj),
     })
 
