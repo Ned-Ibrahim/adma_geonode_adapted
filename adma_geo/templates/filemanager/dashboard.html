@@ -1687,6 +1687,9 @@ function toggleView(viewType) {
     const listBtn = document.getElementById('listViewBtn');
     const panelBtn = document.getElementById('panelViewBtn');
     
+    // An empty dashboard draws neither view
+    if (!listView || !panelView) return;
+    
     if (viewType === 'list') {
         listView.style.display = 'block';
         panelView.style.display = 'none';
