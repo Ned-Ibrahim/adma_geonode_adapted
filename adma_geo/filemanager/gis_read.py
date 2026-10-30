@@ -11,9 +11,16 @@ the custom Map pages zoom to.
 
 Vectors are read with pyogrio and rasters with rasterio; both bring their own
 GDAL.
+
+A raw drone band photo is a TIF too, but not a map: it has no coordinate
+system, only the GPS point where the drone was. It is told apart by what the
+camera wrote into it, not by its name, and reported as DronePhoto with that
+point, so the pages can explain it and pin it instead of calling it an error.
 """
+import dataclasses
 import json
 import math
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +40,18 @@ SHAPEFILE_PARTS = SHAPEFILE_REQUIRED + SHAPEFILE_OPTIONAL
 # best match.
 FALLBACK_CONFIDENCE = 25
 
+# The cameras whose raw band photos are on ADAPT, by the TIFF Make tag they
+# write and the XMP namespace of their own metadata. A TIF with no
+# georeferencing that carries either is a drone photo.
+DRONE_CAMERAS = (
+    ('DJI', 'http://www.dji.com/drone-dji/1.0/'),
+    ('MicaSense', 'http://micasense.com/MicaSense/1.0/'),
+)
+TIFF_MAKE, TIFF_MODEL, TIFF_XMP, EXIF_GPS = 271, 272, 700, 0x8825
+GPS_LATITUDE_REF, GPS_LATITUDE, GPS_LONGITUDE_REF, GPS_LONGITUDE, GPS_ALTITUDE_REF, GPS_ALTITUDE = 1, 2, 3, 4, 5, 6
+
+NO_CRS = 'The raster has no coordinate system'
+
 
 class GisReadError(Exception):
     """ADMA cannot place this file on the map. The message says why, in words for the user."""
@@ -44,6 +63,77 @@ class ShapefilePartsMissing(GisReadError):
     def __init__(self, missing):
         self.missing = list(missing)
         super().__init__(f"The shapefile has no {', '.join(self.missing)} next to it")
+
+
+@dataclass(frozen=True)
+class DronePhotoInfo:
+    """What a raw drone photo says about itself: its camera and where the drone was.
+
+    latitude and longitude are None when the photo holds no GPS fix.
+    relative_altitude is the height above the takeoff point (DJI) and
+    gps_altitude the GPS height above sea level, in meters. gimbal_pitch is the
+    camera angle in degrees, 0 level and -90 straight down (DJI).
+    """
+
+    camera: str
+    band: str = None
+    latitude: float = None
+    longitude: float = None
+    relative_altitude: float = None
+    gps_altitude: float = None
+    gimbal_pitch: float = None
+
+    @classmethod
+    def from_json(cls, data):
+        """The DronePhotoInfo that File.drone_photo keeps."""
+        names = {field.name for field in dataclasses.fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in names})
+
+    def as_json(self):
+        """The photo as File.drone_photo keeps it."""
+        return dataclasses.asdict(self)
+
+    @property
+    def has_position(self):
+        return self.latitude is not None and self.longitude is not None
+
+    @property
+    def position_text(self):
+        """'42.09141, -101.45998': latitude and longitude to about a meter, as map apps take them."""
+        return f'{self.latitude:.5f}, {self.longitude:.5f}' if self.has_position else None
+
+    @property
+    def height_text(self):
+        if self.relative_altitude is not None:
+            return f'{self.relative_altitude:.1f} m above takeoff'
+        if self.gps_altitude is not None:
+            return f'{self.gps_altitude:,.0f} m above sea level'
+        return None
+
+    @property
+    def camera_angle_text(self):
+        if self.gimbal_pitch is None:
+            return None
+        below = round(-self.gimbal_pitch)
+        if below >= 90:
+            return 'Straight down'
+        if below == 0:
+            return 'Level'
+        if below < 0:
+            return f'{-below}° above horizontal'
+        return f'{below}° below horizontal'
+
+    def describe(self):
+        """'DJI M3M, Green band': the camera, and the band when the photo names it."""
+        return self.camera + (f', {self.band} band' if self.band else '')
+
+
+class DronePhoto(GisReadError):
+    """A raw drone photo: not a map, only the point where the drone was (DronePhotoInfo)."""
+
+    def __init__(self, photo):
+        self.photo = photo
+        super().__init__(f'Raw drone photo, not a map ({photo.describe()})')
 
 
 @dataclass(frozen=True)
@@ -140,17 +230,108 @@ def read_vector(path):
 
 
 def read_raster(path):
-    """The SpatialInfo of a raster."""
+    """The SpatialInfo of a raster; DronePhoto for a raw drone photo."""
     import rasterio
 
     try:
         with rasterio.open(path) as src:
             crs, bounds = src.crs, tuple(src.bounds)
+            georeferenced = bool(src.gcps[0]) or bool(src.rpcs) or not src.transform.is_identity
     except Exception as exc:
         raise GisReadError(f'ADMA cannot read this raster: {exc}')
     if crs is None:
-        raise GisReadError('The raster has no coordinate system')
+        photo = None if georeferenced else drone_photo(path)
+        if photo is not None:
+            raise DronePhoto(photo)
+        raise GisReadError(NO_CRS)
     return _info(epsg_code(crs.to_wkt()), bounds)
+
+
+def drone_photo(path):
+    """The DronePhotoInfo of the TIF at `path` if a drone camera made it, else None.
+
+    Read with Pillow, which gives the TIFF Make and Model tags (GDAL reports
+    neither), the XMP packet and the EXIF GPS block. A DJI photo keeps its GPS
+    point, height and camera angle in its XMP; a MicaSense photo only in EXIF.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(path) as image:
+            tags = image.tag_v2
+            make, model, xmp = (_text(tags.get(tag)) for tag in (TIFF_MAKE, TIFF_MODEL, TIFF_XMP))
+            gps = dict(image.getexif().get_ifd(EXIF_GPS))
+    except Exception:
+        # Not a TIFF Pillow can read: nothing says a camera made it.
+        return None
+    brand = next((name for name, namespace in DRONE_CAMERAS
+                  if make.casefold() == name.casefold() or namespace in xmp), None)
+    if brand is None:
+        return None
+
+    latitude = _number(_xmp(xmp, 'drone-dji', 'GpsLatitude'))
+    # Older DJI firmware spells it GpsLongtitude.
+    longitude = _number(_xmp(xmp, 'drone-dji', 'GpsLongitude', 'GpsLongtitude'))
+    if latitude is None or longitude is None:
+        latitude = _exif_degrees(gps.get(GPS_LATITUDE), gps.get(GPS_LATITUDE_REF))
+        longitude = _exif_degrees(gps.get(GPS_LONGITUDE), gps.get(GPS_LONGITUDE_REF))
+    # A drone with no GPS fix writes 0, 0.
+    if (latitude is None or longitude is None or not (-90 <= latitude <= 90 and -180 <= longitude <= 180)
+            or latitude == longitude == 0):
+        latitude = longitude = None
+    gps_altitude = _number(gps.get(GPS_ALTITUDE))
+    if gps_altitude is not None and gps.get(GPS_ALTITUDE_REF) in (1, b'\x01'):
+        gps_altitude = -gps_altitude
+    return DronePhotoInfo(
+        camera=' '.join(part for part in (make or brand, model) if part),
+        band=_xmp(xmp, 'Camera', 'BandName'),
+        latitude=latitude,
+        longitude=longitude,
+        relative_altitude=_number(_xmp(xmp, 'drone-dji', 'RelativeAltitude')),
+        gps_altitude=gps_altitude,
+        gimbal_pitch=_number(_xmp(xmp, 'drone-dji', 'GimbalPitchDegree')),
+    )
+
+
+def _text(value):
+    """A TIFF text or byte tag as a str, without the padding cameras leave."""
+    if isinstance(value, bytes):
+        value = value.decode('utf-8', 'replace')
+    return (value or '').strip('\x00 \t\r\n') if isinstance(value, str) else ''
+
+
+def _xmp(xmp, prefix, *names):
+    """The text of XMP property prefix:name, written as an attribute or an element (the first item of a list)."""
+    for name in names:
+        match = re.search(
+            rf'\b{re.escape(prefix)}:{name}(?:\s*=\s*"([^"]*)"|\s*>\s*(?:<rdf:(?:Seq|Bag|Alt)>\s*<rdf:li[^>]*>)?([^<]*))',
+            xmp)
+        if match:
+            value = (match.group(1) if match.group(1) is not None else match.group(2)).strip()
+            if value:
+                return value
+    return None
+
+
+def _number(value):
+    """A finite float from an XMP string ('+20.348') or an EXIF rational, else None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _exif_degrees(dms, ref):
+    """Decimal degrees from EXIF degrees, minutes and seconds, negative to the south and west."""
+    try:
+        degrees, minutes, seconds = (_number(part) for part in dms)
+    except (TypeError, ValueError):
+        return None
+    if None in (degrees, minutes, seconds):
+        return None
+    value = degrees + minutes / 60 + seconds / 3600
+    return -value if _text(ref).upper() in ('S', 'W') else value
 
 
 def zip_shapefile(path):

@@ -267,6 +267,28 @@
         font-weight: 600 !important;
     }
 
+    /* A raw drone photo: what it is, above a map with a pin where the drone was */
+    .drone-photo-note {
+        display: flex;
+        gap: 1rem;
+        align-items: flex-start;
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
+    }
+
+    .drone-photo-note .fa-camera {
+        color: var(--adma-dark-grey);
+        font-size: 1.5rem;
+        margin-top: 0.15rem;
+    }
+
+    .map-container.photo-map {
+        height: 460px;
+    }
+
 
     
 </style>
@@ -330,7 +352,7 @@
             <h5 class="mb-0 text-break">
                 <i class="fas fa-map me-2"></i>{{ file.name|breakable }}
             </h5>
-            {% if file.gis_status == 'published' and geoserver_info or file.gis_status == 'processed' and geoserver_info %}
+            {% if geoserver_info or drone_photo.has_position %}
             <div class="d-flex align-items-center gap-2">
                 <select id="mapLayerSelect" class="form-select form-select-sm" style="width: auto;">
                     <option value="osm">OpenStreetMap</option>
@@ -356,6 +378,28 @@
                     <strong>Layer:</strong> {{ geoserver_info.workspace }}:{{ geoserver_info.layer_name }}
                 </small>
             </div>
+        {% elif file.gis_status == 'drone_photo' %}
+            <div class="drone-photo-note">
+                <i class="fas fa-camera" aria-hidden="true"></i>
+                <div>
+                    <h5 class="mb-1">Raw drone photo, not a map</h5>
+                    <p class="text-muted mb-0">
+                        Drone photos record only where the drone was.
+                        Stitch the flight into an orthomosaic (DJI Terra, Pix4D, WebODM) to see it on a map.
+                        {% if not drone_photo.has_position %}This one holds no GPS position, so ADMA cannot pin it.{% endif %}
+                    </p>
+                </div>
+            </div>
+            {% if drone_photo.has_position %}
+            <div class="map-container photo-map">
+                <div id="map" style="width: 100%; height: 100%;"></div>
+            </div>
+            <div class="mt-2">
+                <small class="text-muted">
+                    <i class="fas fa-map-marker-alt me-1"></i>The pin is where the drone was when it took this photo, not the ground the photo shows.
+                </small>
+            </div>
+            {% endif %}
         {% elif file.gis_status == 'error' %}
             <div class="text-center py-5 border">
                 <i class="fas fa-exclamation-triangle fa-3x text-danger mb-3"></i>
@@ -404,6 +448,8 @@
                                     <span class="badge bg-info">{{ file.get_gis_status_display }}</span>
                                 {% elif file.gis_status == 'error' %}
                                     <span class="badge bg-danger">{{ file.get_gis_status_display }}</span>
+                                {% elif file.gis_status == 'drone_photo' %}
+                                    <span class="badge bg-secondary">{{ file.get_gis_status_display }}</span>
                                 {% else %}
                                     <span class="badge bg-warning">{{ file.get_gis_status_display }}</span>
                                 {% endif %}
@@ -419,6 +465,48 @@
                 </div>
             </div>
         </div>
+
+        {% if drone_photo %}
+        <div class="card mt-3">
+            <div class="card-header">
+                <h6 class="mb-0">Photo Information</h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <tr>
+                            <td><strong>Camera:</strong></td>
+                            <td>{{ drone_photo.camera }}</td>
+                        </tr>
+                        {% if drone_photo.band %}
+                        <tr>
+                            <td><strong>Band:</strong></td>
+                            <td>{{ drone_photo.band }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if drone_photo.has_position %}
+                        <tr>
+                            <td><strong>GPS:</strong></td>
+                            <td>{{ drone_photo.position_text }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if drone_photo.height_text %}
+                        <tr>
+                            <td><strong>Height:</strong></td>
+                            <td>{{ drone_photo.height_text }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if drone_photo.camera_angle_text %}
+                        <tr>
+                            <td><strong>Angle:</strong></td>
+                            <td>{{ drone_photo.camera_angle_text }}</td>
+                        </tr>
+                        {% endif %}
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
 
         {% if geoserver_info %}
         <div class="card mt-3">
@@ -465,6 +553,99 @@
 {% block extra_js %}
 <!-- OpenLayers JS -->
 <script src="https://cdn.jsdelivr.net/npm/ol@v8.2.0/dist/ol.js"></script>
+
+{% if geoserver_info or drone_photo.has_position %}
+<script>
+// The base maps under both maps this page draws (a published layer, or a drone photo's pin),
+// the controls on them, and the dropdown above that switches the base map.
+function admaBaseLayers() {
+    return {
+        'osm': new ol.layer.Tile({
+            source: new ol.source.OSM(), // Use native OpenStreetMap attribution
+            title: 'OpenStreetMap',
+            visible: false
+        }),
+        'satellite': new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attributions: '© Esri, Maxar, Earthstar Geographics, and the GIS User Community'
+            }),
+            title: 'Satellite',
+            visible: true
+        }),
+        'terrain': new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}',
+                attributions: '© Esri, USGS, NOAA'
+            }),
+            title: 'Terrain',
+            visible: false
+        }),
+        'topo': new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+                attributions: '© Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community'
+            }),
+            title: 'Topographic',
+            visible: false
+        })
+    };
+}
+
+function admaMapControls(map) {
+    map.addControl(new ol.control.Zoom());
+    map.addControl(new ol.control.Attribution({
+        collapsible: false,
+        className: 'ol-attribution ol-unselectable ol-control ol-collapsed'
+    }));
+    map.addControl(new ol.control.ScaleLine());
+    map.addControl(new ol.control.FullScreen());
+}
+
+function admaBaseLayerSelect(baseLayers) {
+    const layerSelect = document.getElementById('mapLayerSelect');
+    if (!layerSelect) {
+        return;
+    }
+    layerSelect.addEventListener('change', function() {
+        Object.values(baseLayers).forEach(layer => layer.setVisible(false));
+        if (baseLayers[this.value]) {
+            baseLayers[this.value].setVisible(true);
+        }
+    });
+}
+</script>
+{% endif %}
+
+{% if drone_photo.has_position %}
+{{ drone_photo.as_json|json_script:"drone-photo" }}
+<script>
+// A raw drone photo: a pin where the drone was. No footprint: the GPS point alone does not say what ground the photo shows.
+document.addEventListener('DOMContentLoaded', function() {
+    const photo = JSON.parse(document.getElementById('drone-photo').textContent);
+    const where = ol.proj.fromLonLat([photo.longitude, photo.latitude]);
+    const pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="42" viewBox="0 0 30 42">' +
+        '<path d="M15 1.5C7.5 1.5 1.5 7.4 1.5 14.8c0 9.6 11.3 23.4 12.6 25a1.2 1.2 0 0 0 1.8 0' +
+        'c1.3-1.6 12.6-15.4 12.6-25C28.5 7.4 22.5 1.5 15 1.5z" fill="#d00000" stroke="#fff" stroke-width="2"/>' +
+        '<circle cx="15" cy="14.5" r="5" fill="#fff"/></svg>';
+    const pin = new ol.layer.Vector({
+        source: new ol.source.Vector({features: [new ol.Feature(new ol.geom.Point(where))]}),
+        style: new ol.style.Style({
+            image: new ol.style.Icon({src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pinSvg), anchor: [0.5, 1]})
+        })
+    });
+    const baseLayers = admaBaseLayers();
+    const map = new ol.Map({
+        target: 'map',
+        layers: Object.values(baseLayers).concat([pin]),
+        controls: [],
+        view: new ol.View({center: where, zoom: 17, projection: 'EPSG:3857'})
+    });
+    admaMapControls(map);
+    admaBaseLayerSelect(baseLayers);
+});
+</script>
+{% endif %}
 
 {% if file.gis_status == 'published' and geoserver_info or file.gis_status == 'processed' and geoserver_info %}
 <script>
@@ -520,38 +701,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Since OpenLayers might not have the full proj4 definition, we'll do manual conversion
         console.log('Setting up UTM Zone 14N projection for coordinate transformation');
         
-        // Create individual base layers WITH native attribution
-        const baseLayers = {
-            'osm': new ol.layer.Tile({
-                source: new ol.source.OSM(), // Use native OpenStreetMap attribution
-                title: 'OpenStreetMap',
-                visible: false
-            }),
-            'satellite': new ol.layer.Tile({
-                source: new ol.source.XYZ({
-                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                    attributions: '© Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-                }),
-                title: 'Satellite',
-                visible: true
-            }),
-            'terrain': new ol.layer.Tile({
-                source: new ol.source.XYZ({
-                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}',
-                    attributions: '© Esri, USGS, NOAA'
-                }),
-                title: 'Terrain',
-                visible: false
-            }),
-            'topo': new ol.layer.Tile({
-                source: new ol.source.XYZ({
-                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-                    attributions: '© Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community'
-                }),
-                title: 'Topographic',
-                visible: false
-            })
-        };
+        const baseLayers = admaBaseLayers();
         
         // Create WMS layer with raster-specific optimizations
         const wmsParams = {
@@ -644,14 +794,7 @@ document.addEventListener('DOMContentLoaded', function() {
             })
         });
         
-        // Add controls manually for full control
-        map.addControl(new ol.control.Zoom());
-        map.addControl(new ol.control.Attribution({
-            collapsible: false,
-            className: 'ol-attribution ol-unselectable ol-control ol-collapsed'
-        }));
-        map.addControl(new ol.control.ScaleLine());
-        map.addControl(new ol.control.FullScreen());
+        admaMapControls(map);
         
         // Fallback function to use stored spatial extent
         function tryStoredExtent() {
@@ -790,34 +933,7 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('WMS URL: {{ geoserver_info.wms_url }}');
         
         
-        // Initialize dropdown layer selector
-        setTimeout(function() {
-            const layerSelect = document.getElementById('mapLayerSelect');
-            if (layerSelect) {
-                layerSelect.addEventListener('change', function() {
-                    const selectedLayer = this.value;
-                    console.log('Switching to layer:', selectedLayer);
-                    
-                    // Hide all base layers
-                    Object.values(baseLayers).forEach(layer => {
-                        layer.setVisible(false);
-                    });
-                    
-                    // Show selected layer
-                    if (baseLayers[selectedLayer]) {
-                        baseLayers[selectedLayer].setVisible(true);
-                        console.log('Layer switched to:', selectedLayer);
-                    } else {
-                        console.log('Layer not found:', selectedLayer);
-                    }
-                });
-                
-                console.log('Dropdown layer selector initialized');
-                console.log('Available base layers:', Object.keys(baseLayers));
-            } else {
-                console.log('Layer dropdown not found');
-            }
-        }, 100);
+        admaBaseLayerSelect(baseLayers);
         
         
         // Auto-zoom to layer extent when map loads

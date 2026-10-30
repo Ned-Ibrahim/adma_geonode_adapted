@@ -71,6 +71,12 @@ def process_gis_file_task(self, file_id):
             publish_to_geoserver_task.delay(file_id)
             
             return f"Successfully processed GIS file: {file_obj.name}"
+        elif file_obj.gis_status == 'drone_photo':
+            # Read, but a photo is not a map: nothing to publish, and nothing went wrong.
+            file_obj.processing_log += f"\n✓ Processing completed: {message}"
+            file_obj.save()
+
+            return f"Raw drone photo, not a map: {file_obj.name}"
         else:
             file_obj.gis_status = 'error'
             file_obj.processing_log += f"\n✗ Processing failed: {message}"

@@ -266,6 +266,10 @@ class File(models.Model):
     geoserver_workspace = models.CharField(max_length=100, blank=True, null=True, help_text="GeoServer workspace")
     spatial_extent = models.TextField(null=True, blank=True, help_text="Spatial extent of the data (JSON)")
     crs = models.CharField(max_length=50, blank=True, null=True, help_text="Coordinate Reference System")
+    drone_photo = models.JSONField(
+        null=True, blank=True,
+        help_text="For a raw drone photo: its camera and where the drone was (gis_read.DronePhotoInfo)",
+    )
     
     # Processing status for GIS files
     GIS_STATUS_CHOICES = [
@@ -274,6 +278,8 @@ class File(models.Model):
         ('processed', 'Processed'),
         ('published', 'Published to GeoServer'),
         ('error', 'Processing Error'),
+        # Read, but not a map: a raw drone photo has only the drone's GPS point (drone_photo).
+        ('drone_photo', 'Drone photo'),
     ]
     gis_status = models.CharField(max_length=20, choices=GIS_STATUS_CHOICES, default='pending', blank=True)
     processing_log = models.TextField(blank=True, help_text="Log of processing steps")

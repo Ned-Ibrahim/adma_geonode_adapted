@@ -19,7 +19,8 @@ command finds both:
   ADMA's vector style. Rasters, and layers given any other style, keep theirs.
 
 Files still 'pending' or 'processing' are left alone: ADAPT files are processed
-when someone opens their map.
+when someone opens their map. So are raw drone photos ('drone_photo'): they
+were read, and are not maps.
 
 Then every custom Map's layer group is brought in step with its visible layers,
 through the same update_layer_group the map pages use: a group made before
@@ -92,6 +93,8 @@ class Command(BaseCommand):
         """(outcome, detail) for one file, after changing it when --apply."""
         if file_obj.gis_status in ('pending', 'processing'):
             return 'left alone', file_obj.gis_status
+        if file_obj.gis_status == 'drone_photo':
+            return 'left alone', 'raw drone photo, not a map'
         if adapt_records.is_gone(file_obj):
             return 'left alone', 'no longer on the ADAPT share'
         if gis_read.kind_of(file_obj.name) is None:
@@ -168,6 +171,10 @@ class Command(BaseCommand):
             success, message = process_gis_file(file_obj)
         except gis_read.ShapefilePartsMissing as missing:
             success, message = False, str(missing)
+        if file_obj.gis_status == 'drone_photo':
+            file_obj.processing_log += f'\n✓ Processing completed: {message}'
+            file_obj.save()
+            return 'drone photo', message
         if not success:
             return self.fail(file_obj, 'Processing failed', message)
         file_obj.processing_log += f'\n✓ Processing completed: {message}'

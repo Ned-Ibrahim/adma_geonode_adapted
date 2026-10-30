@@ -15,7 +15,7 @@ from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from .models import Folder, File, Map, Tool, UserProfile, must_change_password
 from .forms import NewPasswordChangeForm
 from .tasks import process_gis_file_task, queue_gis_processing
-from . import adapt_records, adapt_share, adapt_storage, adapt_views, permissions
+from . import adapt_records, adapt_share, adapt_storage, adapt_views, gis_read, gis_utils, permissions
 
 def get_robust_user_statistics(user):
     """
@@ -1161,7 +1161,7 @@ def file_detail(request, file_id):
         'adapt_folder_name': adapt_folder_name,
         'adapt_folder_url': adapt_folder_url,
         'adapt_gone': adapt_gone,
-        'gis_problem': gis_problem(file_obj),
+        **map_state(file_obj),
     })
 
 def public_file_detail(request, file_id):
@@ -1308,6 +1308,7 @@ def public_file_detail(request, file_id):
         'is_realm5_all': is_realm5_all,
         'realm5_all_data': json.dumps(realm5_all_data) if realm5_all_data else None,
         'realm5_all_variables': json.dumps(realm5_all_variables) if realm5_all_variables else None,
+        **map_state(file_obj),
     })
 
 @login_required
@@ -1781,8 +1782,19 @@ def map_viewer(request, file_id):
         'file': file_obj,
         'geoserver_info': geoserver_info,
         'adapt_crumbs': adapt_crumbs_of(file_obj),
-        'gis_problem': gis_problem(file_obj),
+        **map_state(file_obj),
     })
+
+
+def map_state(file_obj):
+    """What the file and map pages show of a spatial file's map: gis_problem and drone_photo.
+
+    A raw drone photo marked 'error' before ADMA told them apart becomes a
+    drone photo here (gis_utils.recognize_drone_photo).
+    """
+    if file_obj.is_spatial:
+        gis_utils.recognize_drone_photo(file_obj)
+    return {'gis_problem': gis_problem(file_obj), 'drone_photo': drone_photo_of(file_obj)}
 
 
 def gis_problem(file_obj):
@@ -1793,6 +1805,13 @@ def gis_problem(file_obj):
         if line.startswith('✗'):
             return line.lstrip('✗ ').split(': ', 1)[-1]
     return 'ADMA could not prepare this file for the map.'
+
+
+def drone_photo_of(file_obj):
+    """The gis_read.DronePhotoInfo of a raw drone photo: its camera and where the drone was. None otherwise."""
+    if file_obj.gis_status != 'drone_photo' or not file_obj.drone_photo:
+        return None
+    return gis_read.DronePhotoInfo.from_json(file_obj.drone_photo)
 
 def public_map_viewer(request, file_id):
     """Public view of GIS file on a map"""
@@ -1858,6 +1877,7 @@ def public_map_viewer(request, file_id):
         'geoserver_info': geoserver_info,
         'is_public_view': True,  # Flag to adjust breadcrumbs and navigation
         'public_breadcrumbs': file_obj.get_public_breadcrumbs(),  # Add public breadcrumbs
+        **map_state(file_obj),
     })
 
 def adapt_upload_folders(request, adapt_parent, files, file_paths):

@@ -390,12 +390,19 @@ def process_gis_file(file_obj):
     gis_read.ShapefilePartsMissing is raised, not returned, so the caller can
     wait for parts still being uploaded.
 
+    A raw drone photo is read but is not a map: it ends 'drone_photo', with its
+    camera and the drone's GPS point in drone_photo, and success is False, as
+    there is nothing to publish. The caller must not mark it an error.
+
     Returns (success, message).
     """
     try:
         info = read_spatial_info(file_obj)
     except gis_read.ShapefilePartsMissing:
         raise
+    except gis_read.DronePhoto as photo:
+        record_drone_photo(file_obj, photo.photo)
+        return False, str(photo)
     except gis_read.GisReadError as exc:
         message = str(exc)
     except Exception as exc:
@@ -404,14 +411,55 @@ def process_gis_file(file_obj):
     else:
         file_obj.crs = info.crs
         file_obj.spatial_extent = info.envelope_json()
+        file_obj.drone_photo = None
         file_obj.gis_status = 'processed'
         file_obj.save()
         west, south, east, north = info.lonlat
         return True, f"Coordinate system {info.crs}, extent {west:.5f}, {south:.5f}, {east:.5f}, {north:.5f} (longitude, latitude)"
     file_obj.crs = None
     file_obj.spatial_extent = None
+    file_obj.drone_photo = None
     file_obj.save()
     return False, message
+
+
+def record_drone_photo(file_obj, photo):
+    """Store raw drone photo `photo` (a gis_read.DronePhotoInfo) on file_obj: 'drone_photo', no crs, no extent."""
+    file_obj.crs = None
+    file_obj.spatial_extent = None
+    file_obj.drone_photo = photo.as_json()
+    file_obj.gis_status = 'drone_photo'
+    file_obj.save()
+
+
+# What processing logged for a raster with no coordinate system, before it told raw drone photos apart.
+NO_CRS_FAILURE = f'✗ Processing failed: {gis_read.NO_CRS}'
+
+
+def recognize_drone_photo(file_obj):
+    """Read a raster in 'error' for having no coordinate system again, once; True if it is a raw drone photo.
+
+    Processing marked raw drone photos 'error' before it told them apart. The
+    file and map pages call this, so those photos show as drone photos without
+    anyone processing them again. A raster that is still just without a
+    coordinate system gets a line saying it was checked, and is not read again.
+    A file that cannot be read now is left as it was, to be checked next time.
+    """
+    log = (file_obj.processing_log or '').rstrip()
+    if (file_obj.gis_status != 'error' or not log.endswith(NO_CRS_FAILURE)
+            or gis_read.kind_of(file_obj.name) != 'raster'):
+        return False
+    try:
+        gis_read.read_raster(file_obj.local_path)
+    except gis_read.DronePhoto as photo:
+        file_obj.processing_log = f'{log}\n✓ Checked again: {photo}'
+        record_drone_photo(file_obj, photo.photo)
+        return True
+    except gis_read.GisReadError as exc:
+        if str(exc) == gis_read.NO_CRS:
+            file_obj.processing_log = f'{log}\n✗ Checked again: {exc}'
+            file_obj.save(update_fields=['processing_log', 'updated_at'])
+    return False
 
 
 def publish_to_geoserver(file_obj):

@@ -319,9 +319,20 @@
                                         <span class="badge bg-primary">Published to GeoServer</span>
                                     {% elif file.gis_status == 'error' %}
                                         <span class="badge bg-danger">Processing Error</span>
+                                    {% elif file.gis_status == 'drone_photo' %}
+                                        <span class="badge bg-secondary">Drone photo</span>
                                     {% endif %}
                                 </td>
                             </tr>
+                            {% if drone_photo %}
+                            <tr>
+                                <th>Not on the map:</th>
+                                <td>
+                                    Raw drone photo. It records only where the drone was{% if drone_photo.has_position %}: {{ drone_photo.position_text }}{% endif %}.
+                                    {% if drone_photo.has_position %}View on Map shows that point.{% endif %}
+                                </td>
+                            </tr>
+                            {% endif %}
                             {% if gis_problem %}
                             <tr>
                                 <th>Not on the map:</th>
